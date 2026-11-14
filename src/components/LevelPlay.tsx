@@ -190,10 +190,12 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
               <h2>{dialogue.ask === "reply" ? "请你写出回答" : "请你写出问句"}</h2>
             </div>
 
-            <div className="dialogue-card">
+            <div
+              className={`dialogue-card ${dialogue.ask === "question" ? "question-first" : ""}`}
+            >
               <div className="dialogue-bubble">
                 <span className="bubble-tag">
-                  {dialogue.ask === "reply" ? "对方说" : "对方问"}
+                  {dialogue.ask === "reply" ? "对方问" : "对方答"}
                 </span>
                 <p>{dialogue.shown}</p>
                 <button

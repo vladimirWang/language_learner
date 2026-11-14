@@ -1080,6 +1080,8 @@ img {
 /* ---------------- 对话 / 短语题型 ---------------- */
 
 .dialogue-card {
+  display: flex;
+  flex-direction: column;
   width: min(760px, 100%);
   margin: 0 auto;
   background: #fff;
@@ -1133,6 +1135,20 @@ img {
   display: flex;
   gap: 12px;
   margin-top: 20px;
+}
+
+.dialogue-card.question-first .answer-form {
+  order: 1;
+  margin-top: 0;
+}
+
+.dialogue-card.question-first .answer-meta {
+  order: 2;
+  margin-bottom: 20px;
+}
+
+.dialogue-card.question-first .dialogue-bubble {
+  order: 3;
 }
 
 .answer-input {

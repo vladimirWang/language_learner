@@ -211,7 +211,7 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-/** 对话交替练习「回答」和「问句」，短语题看图选出正确短语 */
+/** 对话交替练习「回答」和「问句」，所有题型每次随机排序 */
 export function buildQuestions(course: Course): Question[] {
   const dialogues: DialogueQuestion[] = course.dialogues.map((pair, index) => {
     const askReply = index % 2 === 0;
@@ -246,5 +246,5 @@ export function buildQuestions(course: Course): Question[] {
     };
   });
 
-  return [...dialogues, ...phrases];
+  return shuffle([...dialogues, ...phrases]);
 }
