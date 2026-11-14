@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   COURSES,
   buildQuestions,
@@ -17,16 +18,8 @@ type Props = {
   onNext: (index: number) => void;
 };
 
-type InputState = "idle" | "wrong" | "correct";
-
-/** 大小写与标点保持一致，仅忽略首尾与多余空格、统一弯引号 */
-function normalizeAnswer(text: string): string {
-  return text
-    .replace(/[’‘]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s+/g, " ")
-    .trim();
-}
+type InputState = "idle" | "judging" | "wrong" | "correct";
+type GradeResult = { correct: boolean };
 
 export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) {
   const course = COURSES[index];
@@ -35,6 +28,7 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
   const [mistakes, setMistakes] = useState(0);
   const [input, setInput] = useState("");
   const [inputState, setInputState] = useState<InputState>("idle");
+  const [serviceError, setServiceError] = useState<string | null>(null);
   const [wrongIds, setWrongIds] = useState<string[]>([]);
   const [pickedPhrase, setPickedPhrase] = useState<string | null>(null);
   const [shakeId, setShakeId] = useState<string | null>(null);
@@ -42,6 +36,8 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
   const [stars, setStars] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const timers = useRef<number[]>([]);
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
 
   const later = (fn: () => void, delay: number) => {
     const id = window.setTimeout(fn, delay);
@@ -52,7 +48,10 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
   const isLast = current >= questions.length - 1;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
       timers.current.forEach((timer) => window.clearTimeout(timer));
       timers.current = [];
     };
@@ -77,8 +76,10 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
   };
 
   const advance = () => {
+    requestIdRef.current += 1;
     setInput("");
     setInputState("idle");
+    setServiceError(null);
     setWrongIds([]);
     setPickedPhrase(null);
     setShakeId(null);
@@ -93,21 +94,62 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
     }, 820);
   };
 
-  const submitAnswer = (event: FormEvent) => {
+  const submitAnswer = async (event: FormEvent) => {
     event.preventDefault();
-    if (!question || question.kind !== "dialogue" || inputState === "correct") return;
-    if (!input.trim()) return;
+    if (
+      !question ||
+      question.kind !== "dialogue" ||
+      inputState === "correct" ||
+      inputState === "judging"
+    ) {
+      return;
+    }
 
-    if (normalizeAnswer(input) === normalizeAnswer(question.answer)) {
-      setInputState("correct");
-      sfx.correct();
-      speak(question.answer);
-      afterCorrect();
-    } else {
-      setMistakes((value) => value + 1);
-      setInputState("wrong");
-      sfx.wrong();
-      later(() => setInputState((value) => (value === "wrong" ? "idle" : value)), 700);
+    const studentAnswer = input.trim();
+    if (!studentAnswer) return;
+
+    if (!isTauri()) {
+      setServiceError("浏览器无法调用本地 Agent，请使用 Word Adventure 桌面应用");
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+    setInputState("judging");
+    setServiceError(null);
+
+    try {
+      const result = await invoke<GradeResult>("grade_dialogue_answer", {
+        request: {
+          shown: question.shown,
+          answer: question.answer,
+          ask: question.ask,
+          studentAnswer,
+        },
+      });
+      if (!mountedRef.current || requestId !== requestIdRef.current) return;
+      if (typeof result?.correct !== "boolean") throw new Error("Invalid grade result");
+
+      if (result.correct) {
+        setInputState("correct");
+        sfx.correct();
+        speak(studentAnswer);
+        afterCorrect();
+      } else {
+        setMistakes((value) => value + 1);
+        setInputState("wrong");
+        sfx.wrong();
+        later(() => setInputState((value) => (value === "wrong" ? "idle" : value)), 700);
+      }
+    } catch (error) {
+      if (!mountedRef.current || requestId !== requestIdRef.current) return;
+      const reason =
+        typeof error === "string" ? error : error instanceof Error ? error.message : "";
+      setInputState("idle");
+      setServiceError(
+        reason
+          ? `判分失败：${reason}。本次不计错，可重试`
+          : "判分服务暂不可用，本次不计错，可重试",
+      );
     }
   };
 
@@ -218,8 +260,9 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
                   onChange={(event) => {
                     setInput(event.target.value);
                     if (inputState === "wrong") setInputState("idle");
+                    if (serviceError) setServiceError(null);
                   }}
-                  disabled={inputState === "correct"}
+                  disabled={inputState === "correct" || inputState === "judging"}
                   placeholder={
                     dialogue.ask === "reply" ? "输入回答的英文…" : "输入问句的英文…"
                   }
@@ -227,23 +270,28 @@ export default function LevelPlay({ index, onExit, onComplete, onNext }: Props) 
                   autoCorrect="off"
                   autoCapitalize="off"
                   spellCheck={false}
+                  maxLength={500}
                 />
                 <button
                   className="btn primary"
                   type="submit"
-                  disabled={!input.trim() || inputState === "correct"}
+                  disabled={
+                    !input.trim() || inputState === "correct" || inputState === "judging"
+                  }
                 >
-                  确定
+                  {inputState === "judging" ? "判分中…" : "确定"}
                 </button>
               </form>
 
               <div className="answer-meta">
-                <span className="answer-tip">
-                  要和答案一模一样，大小写和标点也要一致
-                </span>
+                <span className="answer-tip">可使用同义表达，需语法正确并恰当回应</span>
+                {inputState === "judging" && (
+                  <span className="answer-judging">Agent 正在判分…</span>
+                )}
                 {inputState === "wrong" && (
                   <span className="answer-error">再试一次，仔细看看句子哦</span>
                 )}
+                {serviceError && <span className="answer-error">{serviceError}</span>}
                 {inputState === "correct" && (
                   <span className="answer-success">
                     <CheckIcon size={12} /> 答对啦
