@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { RAINBOW } from "../game/levels";
+import { RAINBOW } from "../game/theme";
 
 const SHAPES = ["confetti-dot", "confetti-bar", "confetti-star"];
 

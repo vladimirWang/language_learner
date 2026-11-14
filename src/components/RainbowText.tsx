@@ -1,4 +1,4 @@
-import { RAINBOW } from "../game/levels";
+import { RAINBOW } from "../game/theme";
 
 type Props = {
   text: string;

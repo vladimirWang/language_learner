@@ -1,4 +1,4 @@
-const STORAGE_KEY = "word-adventure-progress-v1";
+const STORAGE_KEY = "word-adventure-progress-v2";
 
 export type Progress = {
   /** 已解锁的最高关卡下标（从 0 开始） */

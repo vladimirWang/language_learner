@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { LEVELS } from "../game/levels";
+import { COURSES, questionCount } from "../game/courses";
 import type { Progress } from "../game/progress";
 import { totalStars } from "../game/progress";
 import RainbowText from "./RainbowText";
@@ -7,18 +7,8 @@ import { CheckIcon, LockIcon, SparkleIcon, TrophyIcon } from "./icons";
 import { sfx } from "../game/audio";
 
 const MAP_WIDTH = 920;
-const MAP_HEIGHT = 1470;
 
-const NODE_POINTS = [
-  { x: 455, y: 150 },
-  { x: 280, y: 306 },
-  { x: 420, y: 462 },
-  { x: 632, y: 618 },
-  { x: 478, y: 774 },
-  { x: 286, y: 930 },
-  { x: 470, y: 1086 },
-  { x: 676, y: 1242 },
-];
+const X_PATTERN = [455, 280, 420, 632, 478, 286, 470, 676];
 
 const FLOWERS = [
   { x: 112, y: 236, color: "#F2588E" },
@@ -60,8 +50,21 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
   const viewportRef = useRef<HTMLDivElement>(null);
   const nodeRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
+  const unlocked = Math.min(progress.unlocked, Math.max(0, COURSES.length - 1));
+  const points = COURSES.map((_, index) => ({
+    x: X_PATTERN[index % X_PATTERN.length],
+    y: 150 + index * 156,
+  }));
+  const mapHeight = Math.max(
+    660,
+    (points.length ? points[points.length - 1].y : 0) + 230,
+  );
+  const litCount = Math.min(COURSES.length, unlocked + 1);
+  const allDone =
+    COURSES.length > 0 && COURSES.every((course) => (progress.stars[course.id] ?? 0) > 0);
+
   useEffect(() => {
-    const target = nodeRefs.current[freshIndex ?? progress.unlocked];
+    const target = nodeRefs.current[freshIndex ?? unlocked];
     target?.scrollIntoView({
       block: "center",
       behavior: freshIndex === null ? "auto" : "smooth",
@@ -70,11 +73,8 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const litCount = Math.min(LEVELS.length, progress.unlocked + 1);
-  const allDone = Object.keys(progress.stars).length === LEVELS.length;
-
   const handleSelect = (index: number) => {
-    if (index > progress.unlocked) return;
+    if (index > unlocked) return;
     sfx.tap();
     onSelect(index);
   };
@@ -90,7 +90,7 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
           <div className="star-pill" title="已收集的星星">
             <span className="star-glyph">★</span>
             <span>
-              {totalStars(progress)} <i>/ {LEVELS.length * 3}</i>
+              {totalStars(progress)} <i>/ {COURSES.length * 3}</i>
             </span>
           </div>
           <button className="reset-btn" onClick={onReset}>
@@ -100,7 +100,7 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
       </header>
 
       <div className="map-viewport" ref={viewportRef}>
-        <div className="map-canvas" style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}>
+        <div className="map-canvas" style={{ width: MAP_WIDTH, height: mapHeight }}>
           <div className="map-decor" aria-hidden="true">
             <span className="sun" />
             <span className="cloud cloud-1" />
@@ -162,8 +162,8 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
           <svg
             className="map-path"
             width={MAP_WIDTH}
-            height={MAP_HEIGHT}
-            viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`}
+            height={mapHeight}
+            viewBox={`0 0 ${MAP_WIDTH} ${mapHeight}`}
             aria-hidden="true"
           >
             <defs>
@@ -174,16 +174,16 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
               </linearGradient>
             </defs>
             <path
-              d={smoothPath(NODE_POINTS)}
+              d={smoothPath(points)}
               fill="none"
               stroke="#EBDFCB"
               strokeWidth="13"
               strokeLinecap="round"
               strokeDasharray="2 22"
             />
-            {progress.unlocked > 0 && (
+            {unlocked > 0 && (
               <path
-                d={smoothPath(NODE_POINTS.slice(0, Math.min(progress.unlocked + 1, NODE_POINTS.length)))}
+                d={smoothPath(points.slice(0, Math.min(unlocked + 1, points.length)))}
                 fill="none"
                 stroke="url(#roadGradient)"
                 strokeWidth="9"
@@ -192,29 +192,25 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
             )}
           </svg>
 
-          {LEVELS.map((level, index) => {
-            const earned = progress.stars[level.id] ?? 0;
+          {COURSES.map((course, index) => {
+            const earned = progress.stars[course.id] ?? 0;
             const state =
-              index > progress.unlocked
-                ? "locked"
-                : earned > 0
-                  ? "completed"
-                  : "current";
+              index > unlocked ? "locked" : earned > 0 ? "completed" : "current";
             return (
               <button
-                key={level.id}
+                key={course.id}
                 ref={(el) => {
                   nodeRefs.current[index] = el;
                 }}
                 className={`map-node ${state} ${freshIndex === index ? "fresh" : ""}`}
                 style={{
-                  left: NODE_POINTS[index].x,
-                  top: NODE_POINTS[index].y,
-                  ["--accent" as string]: level.accent,
+                  left: points[index].x,
+                  top: points[index].y,
+                  ["--accent" as string]: course.accent,
                 }}
                 onClick={() => handleSelect(index)}
                 disabled={state === "locked"}
-                aria-label={`第 ${index + 1} 关：${level.word}（${level.zh}）`}
+                aria-label={`第 ${index + 1} 关：${course.title}，共 ${questionCount(course)} 道题`}
               >
                 {state === "current" && (
                   <span className="node-bubble">
@@ -224,7 +220,7 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
                 <span className="node-orb-wrap">
                   {state === "current" && <span className="node-halo" />}
                   <span className="node-orb">
-                    <img src={level.thumb} alt="" draggable={false} />
+                    <img src={course.thumb} alt="" draggable={false} />
                     <span className="node-number">{index + 1}</span>
                     {state === "locked" && (
                       <span className="node-lock">
@@ -239,7 +235,7 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
                   </span>
                 </span>
                 <span className="node-label">
-                  <RainbowText text={level.word} offset={index * 2} />
+                  <RainbowText text={course.title} offset={index * 2} />
                 </span>
                 {state === "completed" ? (
                   <span className="node-stars" aria-label={`获得 ${earned} 颗星`}>
@@ -251,12 +247,21 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
                   </span>
                 ) : (
                   <span className="node-zh">
-                    {state === "locked" ? "未解锁" : level.zh}
+                    {state === "locked"
+                      ? "未解锁"
+                      : `${course.dialogues.length} 对话 · ${course.phrases.length} 短语`}
                   </span>
                 )}
               </button>
             );
           })}
+
+          {COURSES.length === 0 && (
+            <div className="map-empty">
+              <p className="finish-title">courses 目录里还没有课程文件</p>
+              <p className="finish-sub">新建一节课程（如 2.md）后重新运行即可开始</p>
+            </div>
+          )}
 
           <div className={`map-finish ${allDone ? "all-done" : ""}`}>
             <span className="finish-badge">
@@ -264,10 +269,16 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
             </span>
             <div>
               <p className="finish-title">
-                {allDone ? "全部通关，太厉害啦！" : `已点亮 ${litCount} / ${LEVELS.length} 关`}
+                {COURSES.length === 0
+                  ? "等待新课程"
+                  : allDone
+                    ? "全部通关，太厉害啦！"
+                    : `已点亮 ${litCount} / ${COURSES.length} 关`}
               </p>
               <p className="finish-sub">
-                {allDone ? "8 个单词都被你收进小脑袋啦" : "继续往前走，闯过一关就点亮一个单词"}
+                {allDone
+                  ? `${COURSES.length} 节课程都被你收进小脑袋啦`
+                  : "继续往前走，闯过一关就点亮下一节课程"}
               </p>
             </div>
           </div>

@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import MapScreen from "./components/MapScreen";
 import LevelPlay from "./components/LevelPlay";
-import { LEVELS } from "./game/levels";
+import { COURSES } from "./game/courses";
 import {
   emptyProgress,
   loadProgress,
@@ -17,14 +17,14 @@ export default function App() {
   const freshTimer = useRef<number | null>(null);
 
   const handleComplete = (index: number, stars: number) => {
-    const lastIndex = LEVELS.length - 1;
+    const lastIndex = COURSES.length - 1;
     const newlyUnlocked = index < lastIndex && progress.unlocked <= index;
     const next: Progress = {
       unlocked:
         index >= lastIndex ? progress.unlocked : Math.max(progress.unlocked, index + 1),
       stars: {
         ...progress.stars,
-        [LEVELS[index].id]: Math.max(progress.stars[LEVELS[index].id] ?? 0, stars),
+        [COURSES[index].id]: Math.max(progress.stars[COURSES[index].id] ?? 0, stars),
       },
     };
     setProgress(next);
