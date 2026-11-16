@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import MapScreen from "./components/MapScreen";
 import LevelPlay from "./components/LevelPlay";
+import AgentChat from "./components/AgentChat";
 import { COURSES } from "./game/courses";
 import {
   emptyProgress,
@@ -9,8 +10,11 @@ import {
   type Progress,
 } from "./game/progress";
 
+type View = "map" | "agent";
+
 export default function App() {
   const [progress, setProgress] = useState<Progress>(() => loadProgress());
+  const [view, setView] = useState<View>("map");
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [freshIndex, setFreshIndex] = useState<number | null>(null);
   const [pendingFresh, setPendingFresh] = useState<number | null>(null);
@@ -58,20 +62,23 @@ export default function App() {
 
   return (
     <div className="app">
-      {activeIndex === null ? (
-        <MapScreen
-          progress={progress}
-          freshIndex={freshIndex}
-          onSelect={setActiveIndex}
-          onReset={resetProgress}
-        />
-      ) : (
+      {activeIndex !== null ? (
         <LevelPlay
           key={activeIndex}
           index={activeIndex}
           onExit={goMap}
           onComplete={handleComplete}
           onNext={goNext}
+        />
+      ) : view === "agent" ? (
+        <AgentChat onExit={() => setView("map")} />
+      ) : (
+        <MapScreen
+          progress={progress}
+          freshIndex={freshIndex}
+          onSelect={setActiveIndex}
+          onOpenAgent={() => setView("agent")}
+          onReset={resetProgress}
         />
       )}
     </div>

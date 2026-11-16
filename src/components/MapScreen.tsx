@@ -43,10 +43,17 @@ type Props = {
   progress: Progress;
   freshIndex: number | null;
   onSelect: (index: number) => void;
+  onOpenAgent: () => void;
   onReset: () => void;
 };
 
-export default function MapScreen({ progress, freshIndex, onSelect, onReset }: Props) {
+export default function MapScreen({
+  progress,
+  freshIndex,
+  onSelect,
+  onOpenAgent,
+  onReset,
+}: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const nodeRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
@@ -87,6 +94,10 @@ export default function MapScreen({ progress, freshIndex, onSelect, onReset }: P
           <p className="brand-sub">单词冒险 · 完成一关，下一关就会亮起来</p>
         </div>
         <div className="header-actions">
+          <button className="agent-entry" onClick={onOpenAgent}>
+            <SparkleIcon size={16} color="#fff" />
+            Agent 练习
+          </button>
           <div className="star-pill" title="已收集的星星">
             <span className="star-glyph">★</span>
             <span>
