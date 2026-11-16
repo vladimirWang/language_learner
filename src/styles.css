@@ -2219,3 +2219,144 @@ img {
     max-width: 88%;
   }
 }
+
+/* ---------------- 素材更新 ---------------- */
+
+.material-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink-soft);
+  font-family: var(--font-display);
+  font-size: 13px;
+  padding: 10px 15px;
+  border-radius: 999px;
+  box-shadow: 0 6px 14px rgba(160, 125, 85, 0.12);
+  transition:
+    background 0.16s,
+    color 0.16s,
+    transform 0.16s;
+}
+
+.material-entry:hover {
+  background: #fff;
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.material-card {
+  width: min(460px, 92vw);
+  background: #fff;
+  border: 4px solid #fff3e2;
+  border-radius: 30px;
+  padding: 22px 24px 20px;
+  box-shadow: 0 30px 60px rgba(90, 60, 30, 0.26);
+}
+
+.material-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.material-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  color: var(--ink);
+}
+
+.material-close {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 50%;
+  background: #f7efe3;
+  color: var(--ink-soft);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.material-close:hover {
+  background: #efe3d1;
+}
+
+.material-rows {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.material-rows > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #fffaf2;
+  border-radius: 12px;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.material-rows b {
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.material-rows code {
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: #6c5cd0;
+  background: #f3efff;
+  padding: 3px 8px;
+  border-radius: 8px;
+}
+
+.material-status {
+  margin: 14px 0 0;
+  padding: 10px 13px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.material-status.info {
+  background: #eef4ff;
+  color: #4a6da8;
+}
+
+.material-status.ok {
+  background: #f1fbf0;
+  color: #327a3d;
+}
+
+.material-status.error {
+  background: #fff2f0;
+  color: #b4453a;
+}
+
+.material-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.material-tip {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink-faint);
+}

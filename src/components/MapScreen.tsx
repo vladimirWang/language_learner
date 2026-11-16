@@ -3,6 +3,7 @@ import { COURSES, questionCount } from "../game/courses";
 import type { Progress } from "../game/progress";
 import { totalStars } from "../game/progress";
 import RainbowText from "./RainbowText";
+import MaterialUpdate from "./MaterialUpdate";
 import { CheckIcon, LockIcon, SparkleIcon, TrophyIcon } from "./icons";
 import { sfx } from "../game/audio";
 
@@ -94,6 +95,7 @@ export default function MapScreen({
           <p className="brand-sub">单词冒险 · 完成一关，下一关就会亮起来</p>
         </div>
         <div className="header-actions">
+          <MaterialUpdate />
           <button className="agent-entry" onClick={onOpenAgent}>
             <SparkleIcon size={16} color="#fff" />
             Agent 练习

@@ -521,7 +521,8 @@ fn build_quiz(conn: &Connection, level: &str, kind: &str, count: usize) -> Resul
 }
 
 /// 首次运行时把内置真值库释放到应用数据目录；`GROUND_TRUTH_DB` 可指到别处调试。
-fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
+/// 通过「素材更新」下载过新库时（存在版本标记），优先使用下载的库。
+pub(crate) fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("GROUND_TRUTH_DB") {
         let path = PathBuf::from(path);
         if path.exists() {
@@ -537,12 +538,19 @@ fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|error| format!("无法创建应用数据目录：{error}"))?;
 
     let path = dir.join("ground_truth_de.db");
+    let marker = dir.join("material_version.json");
+    if marker.exists() && path.exists() {
+        return Ok(path);
+    }
+
     let up_to_date = std::fs::metadata(&path)
         .map(|meta| meta.len() as usize == DB_BYTES.len())
         .unwrap_or(false);
     if !up_to_date {
         std::fs::write(&path, DB_BYTES).map_err(|error| format!("释放真值库失败：{error}"))?;
     }
+    // 缺少 db 但残留版本标记时清掉，避免下次误判。
+    let _ = std::fs::remove_file(&marker);
     Ok(path)
 }
 

@@ -9,6 +9,7 @@ import {
   type QuizRequest,
 } from "../game/agent";
 import AgentQuiz from "./AgentQuiz";
+import MaterialUpdate from "./MaterialUpdate";
 import { ArrowLeftIcon, SparkleIcon } from "./icons";
 
 type Props = {
@@ -110,6 +111,7 @@ export default function AgentChat({ onExit }: Props) {
           </div>
         </div>
         <span className="agent-lang-chip">仅德语 · A1 / A2</span>
+        <MaterialUpdate />
       </header>
 
       <div className="agent-body">
