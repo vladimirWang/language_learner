@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 export type ExamSummary = {
   examId: string;
@@ -49,11 +49,6 @@ export function resolveListeningPath(baseDir: string, relative: string): Promise
 
 /** 把绝对路径包装成 Tauri asset:// URL，WKWebView / CEF 才能正常加载本地文件 */
 export function toAssetUrl(absolutePath: string): string {
-  // convertFileSrc 会把 / 替换成 / 并用 asset://localhost/ 前缀
-  if (typeof window !== "undefined" && "convertFileSrc" in window) {
-    const fn = (window as unknown as { convertFileSrc?: (p: string) => string }).convertFileSrc;
-    if (fn) return fn(absolutePath);
-  }
-  // fallback：直接 file://
-  return `file://${absolutePath}`;
+  // Tauri 2: convertFileSrc 从 @tauri-apps/api/core 导入
+  return convertFileSrc(absolutePath);
 }

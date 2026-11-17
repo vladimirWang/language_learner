@@ -393,6 +393,20 @@ export default function ListeningExamView({
   const userPick = answers[num];
   const isRevealed = revealed.has(num);
   const hasAnswer = !!question.answer;
+  // 判断题（答案为 R/F）显示 richtig/falsch；选择题在 OCR 提取到足够选项时显示选项文字
+  const isTrueFalse = question.answer === "R" || question.answer === "F";
+  const options = question.options ?? [];
+  const useOptionText = !isTrueFalse && options.length >= 3;
+  const choiceList: { value: string; label: string; text?: string }[] = isTrueFalse
+    ? [
+        { value: "R", label: "richtig" },
+        { value: "F", label: "falsch" },
+      ]
+    : (useOptionText ? CHOICES.slice(0, options.length) : [...CHOICES]).map((letter, index) => ({
+        value: letter,
+        label: letter,
+        text: useOptionText ? options[index] : undefined,
+      }));
 
   return (
     <div className="play-screen">
@@ -505,22 +519,35 @@ export default function ListeningExamView({
             </div>
           )}
 
-          {/* 选项 */}
+          {/* 选项：判断题显示 richtig/falsch，选择题优先显示 OCR 提取的选项文字 */}
           <div className="word-grid phrase-grid">
-            {CHOICES.map((letter) => {
-              const isUserPick = userPick === letter;
-              const isCorrect = question.answer === letter;
+            {choiceList.map((choice) => {
+              const isUserPick = userPick === choice.value;
+              const isCorrect = question.answer === choice.value;
               const showCorrect = isRevealed && isCorrect;
               const showWrong = isRevealed && isUserPick && !isCorrect;
               return (
                 <button
-                  key={letter}
-                  className={`word-option ${showCorrect ? "correct" : ""} ${showWrong ? "wrong" : ""}`}
-                  onClick={() => pick(letter)}
+                  key={choice.value}
+                  className={`word-option ${isUserPick && !isRevealed ? "selected" : ""} ${showCorrect ? "correct" : ""} ${showWrong ? "wrong" : ""}`}
+                  onClick={() => pick(choice.value)}
                   disabled={isRevealed || !hasAnswer}
-                  style={{ fontSize: 20, fontWeight: 700, minHeight: 64 }}
+                  style={{
+                    fontSize: 16,
+                    fontWeight: 600,
+                    minHeight: 64,
+                    textAlign: isTrueFalse ? "center" : "left",
+                    padding: "12px 16px",
+                  }}
                 >
-                  {letter}
+                  {choice.text ? (
+                    <>
+                      <span style={{ fontWeight: 700, marginRight: 8 }}>{choice.value}.</span>
+                      {choice.text}
+                    </>
+                  ) : (
+                    choice.label
+                  )}
                   {(showCorrect || showWrong) && (
                     <span className="option-check">
                       <CheckIcon size={18} />

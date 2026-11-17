@@ -1073,6 +1073,11 @@ img {
   opacity: 0.5;
 }
 
+.word-option.selected {
+  border-color: #FF8C42;
+  box-shadow: 0 0 0 6px rgba(255, 140, 66, 0.18);
+}
+
 .shake {
   animation: shake 0.42s ease;
 }
