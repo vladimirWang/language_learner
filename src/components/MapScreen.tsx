@@ -23,7 +23,9 @@ const DIFFICULTY_COLORS: Record<Difficulty, string> = {
 type Props = {
   levels: Level[]
   progress: Progress
+  loading?: boolean
   onSelectLevel: (level: Level) => void
+  onRefresh?: () => void
   onOpenAgent: () => void
   onOpenListening: () => void
   onReset: () => void
@@ -32,7 +34,9 @@ type Props = {
 export default function MapScreen({
   levels,
   progress,
+  loading,
   onSelectLevel,
+  onRefresh,
   onOpenAgent,
   onOpenListening,
   onReset,
@@ -60,6 +64,17 @@ export default function MapScreen({
           <p className="brand-sub">完成低难度全部关卡，解锁下一难度</p>
         </div>
         <div className="header-actions">
+          {onRefresh && (
+            <button
+              className="agent-entry"
+              onClick={onRefresh}
+              disabled={loading}
+              title="刷新关卡配置"
+              style={{ opacity: loading ? 0.5 : 1 }}
+            >
+              {loading ? "刷新中…" : "🔄 刷新"}
+            </button>
+          )}
           <MaterialUpdate />
           <button className="agent-entry" onClick={onOpenListening} title="自由练习">
             🎧 自由练习

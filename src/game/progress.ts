@@ -58,7 +58,8 @@ export function isDifficultyCompleted(
   difficulty: Difficulty,
 ): boolean {
   const diffLevels = levels.filter((lv) => lv.difficulty === difficulty)
-  if (diffLevels.length === 0) return true
+  // 没有关卡不算完成，避免空难度误显示"全部完成"
+  if (diffLevels.length === 0) return false
   return diffLevels.every((lv) => isLevelCompleted(progress, lv.id))
 }
 

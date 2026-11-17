@@ -23,23 +23,18 @@ export default function App() {
   const [activeLevel, setActiveLevel] = useState<Level | null>(null);
   const [activeDetail, setActiveDetail] = useState<LevelDetail | null>(null);
 
-  // 启动时拉取关卡配置
-  useEffect(() => {
-    let cancelled = false;
+  // 拉取关卡配置（启动时 + 手动刷新时调用）
+  const loadLevels = () => {
     setLevelsLoading(true);
+    setLevelsError(null);
     fetchLevels()
-      .then((list) => {
-        if (!cancelled) setLevels(list);
-      })
-      .catch((e) => {
-        if (!cancelled) setLevelsError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLevelsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((list) => setLevels(list))
+      .catch((e) => setLevelsError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLevelsLoading(false));
+  };
+
+  useEffect(() => {
+    loadLevels();
   }, []);
 
   // 点击地图上的关卡 → 拉取详情并进入
@@ -95,7 +90,9 @@ export default function App() {
         <MapScreen
           levels={levels}
           progress={progress}
+          loading={levelsLoading}
           onSelectLevel={handleSelectLevel}
+          onRefresh={loadLevels}
           onOpenAgent={() => setView("agent")}
           onOpenListening={() => setView("listening")}
           onReset={resetProgress}

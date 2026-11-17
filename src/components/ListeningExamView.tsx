@@ -63,16 +63,18 @@ export default function ListeningExamView({
     : exams;
 
   const reload = async () => {
-    if (isLevelMode) return;
-    setLoading(true);
-    setError(null);
+    // 关卡模式下也需要扫描以获取各 exam 的 baseDir（用于解析音视频路径）
+    if (!isLevelMode) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const list = await scanListeningExams();
       setExams(list);
     } catch (e) {
-      setError(typeof e === "string" ? e : (e as Error).message);
+      if (!isLevelMode) setError(typeof e === "string" ? e : (e as Error).message);
     } finally {
-      setLoading(false);
+      if (!isLevelMode) setLoading(false);
     }
   };
 
@@ -89,8 +91,13 @@ export default function ListeningExamView({
       const mf = await loadListeningManifest(id);
       setManifest(mf);
 
-      // 找到 baseDir
-      const summary = exams?.find((e) => e.examId === id);
+      // 找到 baseDir（关卡模式下可能还没扫描完，找不到时再扫一次）
+      let summary = exams?.find((e) => e.examId === id);
+      if (!summary) {
+        const list = await scanListeningExams();
+        setExams(list);
+        summary = list.find((e) => e.examId === id);
+      }
       const baseDir = summary?.baseDir ?? "";
 
       const aMap: Record<number, string> = {};
@@ -584,7 +591,7 @@ export default function ListeningExamView({
                 }
               }}
             >
-              <SpeakerIcon size={18} /> 重新播放
+              <SpeakerIcon size={18} />
             </button>
           </div>
         </section>
