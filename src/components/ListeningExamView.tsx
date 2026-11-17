@@ -7,21 +7,37 @@ import {
   type ExamSummary,
   type ListeningManifest,
 } from "../game/listening";
+import type { Level, LevelExam } from "../game/levels";
 import { sfx } from "../game/audio";
 import { ArrowLeftIcon, CheckIcon, SpeakerIcon } from "./icons";
 
 type Props = {
   onExit: () => void;
+  /** 关卡模式：传入则只展示该关卡关联的 exams */
+  level?: Level;
+  exams?: LevelExam[];
+  /** 单个 exam 完成回调 */
+  onExamComplete?: (examId: string) => void;
+  /** 关卡所有 exam 完成回调 */
+  onLevelComplete?: () => void;
 };
 
 type AnswerState = Record<number, string>; // question_number -> user's A/B/C/D
 
 const CHOICES = ["A", "B", "C", "D"] as const;
 
-export default function ListeningExamView({ onExit }: Props) {
+export default function ListeningExamView({
+  onExit,
+  level,
+  exams: levelExams,
+  onExamComplete,
+  onLevelComplete,
+}: Props) {
+  const isLevelMode = !!level;
   const [exams, setExams] = useState<ExamSummary[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [completedExams, setCompletedExams] = useState<Set<string>>(new Set());
 
   // 加载 manifest + 预解析文件 URL
   const [manifest, setManifest] = useState<ListeningManifest | null>(null);
@@ -34,8 +50,20 @@ export default function ListeningExamView({ onExit }: Props) {
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
   const [finished, setFinished] = useState(false);
 
-  // 扫描本地素材
+  // 关卡模式：用传入的 exams；自由模式：扫描本地素材
+  const displayExams = isLevelMode
+    ? (levelExams ?? []).map((e) => ({
+        examId: e.exam_id,
+        title: e.exam_id,
+        lang: e.lang,
+        questionCount: 0,
+        baseDir: "",
+        hasAnswers: true,
+      }))
+    : exams;
+
   const reload = async () => {
+    if (isLevelMode) return;
     setLoading(true);
     setError(null);
     try {
@@ -144,6 +172,15 @@ export default function ListeningExamView({ onExit }: Props) {
     } else {
       setFinished(true);
       sfx.win();
+      // 关卡模式：标记 exam 完成
+      if (isLevelMode && examId) {
+        setCompletedExams((prev) => {
+          const next = new Set(prev);
+          next.add(examId);
+          return next;
+        });
+        onExamComplete?.(examId);
+      }
     }
   };
 
@@ -160,6 +197,11 @@ export default function ListeningExamView({ onExit }: Props) {
     setImageUrls({});
   };
 
+  const allExamsDone = isLevelMode
+    ? (levelExams ?? []).length > 0 &&
+      (levelExams ?? []).every((e) => completedExams.has(e.exam_id))
+    : false;
+
   // ========== 渲染 ==========
 
   // 空：素材列表
@@ -171,18 +213,30 @@ export default function ListeningExamView({ onExit }: Props) {
             <ArrowLeftIcon size={18} />
             返回
           </button>
-          <span className="level-chip" style={{ background: "#F0A04B" }}>
-            听力导入练习
+          <span className="level-chip" style={{ background: isLevelMode ? "#2F86D6" : "#F0A04B" }}>
+            {isLevelMode ? level!.name : "自由练习"}
           </span>
+          {isLevelMode && (
+            <span className="quiz-count">
+              已完成 {completedExams.size} / {levelExams?.length ?? 0}
+            </span>
+          )}
         </div>
 
         <div className="play-body">
           <div style={{ width: "100%", maxWidth: 720 }}>
-            <h2 style={{ marginBottom: 8 }}>本地听力素材</h2>
-            <p style={{ color: "#888", marginBottom: 24 }}>
-              先在管理台用「听力导入」把 URL 转成题目，再把{" "}
-              <code>listening/{"{exam_id}"}</code> 目录拷到客户端测试目录。
-            </p>
+            <h2 style={{ marginBottom: 8 }}>
+              {isLevelMode ? `${level!.name} · ${level!.difficulty}` : "本地听力素材"}
+            </h2>
+            {isLevelMode && level!.description && (
+              <p style={{ color: "#888", marginBottom: 24 }}>{level!.description}</p>
+            )}
+            {!isLevelMode && (
+              <p style={{ color: "#888", marginBottom: 24 }}>
+                先在管理台用「听力导入」把 URL 转成题目，再把{" "}
+                <code>listening/{"{exam_id}"}</code> 目录拷到客户端测试目录。
+              </p>
+            )}
 
             {error && (
               <div
@@ -200,7 +254,7 @@ export default function ListeningExamView({ onExit }: Props) {
 
             {loading && <div>扫描中…</div>}
 
-            {!loading && exams && exams.length === 0 && (
+            {!loading && displayExams && displayExams.length === 0 && (
               <div
                 style={{
                   background: "#FFF8E1",
@@ -210,54 +264,67 @@ export default function ListeningExamView({ onExit }: Props) {
                 }}
               >
                 <p style={{ fontWeight: 600, marginBottom: 8 }}>
-                  还没有听力素材哦
+                  {isLevelMode ? "该关卡还没有关联听力素材" : "还没有听力素材哦"}
                 </p>
-                <p style={{ color: "#666", fontSize: 13, lineHeight: 1.6 }}>
-                  <code>
-                    LISTENING_DATA_DIR
-                  </code>{" "}
-                  指向的目录（默认是 app_data/listening）里还没有{" "}
-                  <code>manifest.json</code>。
-                  <br />
-                  快速测试：
-                  <br />
-                  <span style={{ color: "#888" }}>
-                    cp -r builder/work/listening/goethe-a1-hoeren-01 /tmp/client-data/listening/
-                  </span>
-                  <br />
-                  然后用{" "}
-                  <code>LISTENING_DATA_DIR=/tmp/client-data/listening</code>{" "}
-                  启动。
-                </p>
+                {!isLevelMode && (
+                  <p style={{ color: "#666", fontSize: 13, lineHeight: 1.6 }}>
+                    <code>LISTENING_DATA_DIR</code> 指向的目录里还没有 <code>manifest.json</code>。
+                  </p>
+                )}
               </div>
             )}
 
-            {!loading && exams && exams.length > 0 && (
+            {allExamsDone && (
+              <div
+                style={{
+                  background: "#E8F5E9",
+                  padding: "16px",
+                  borderRadius: 10,
+                  marginBottom: 16,
+                  textAlign: "center",
+                }}
+              >
+                <p style={{ fontWeight: 600, color: "#27AE60", marginBottom: 8 }}>
+                  🎉 恭喜！你已完成本关卡所有听力素材
+                </p>
+                <button className="btn primary" onClick={() => onLevelComplete?.()}>
+                  返回地图
+                </button>
+              </div>
+            )}
+
+            {!loading && displayExams && displayExams.length > 0 && (
               <div className="word-grid" style={{ gridTemplateColumns: "1fr" }}>
-                {exams.map((e) => (
-                  <button
-                    key={e.examId}
-                    className="word-option"
-                    style={{ textAlign: "left", padding: 14, height: "auto" }}
-                    onClick={() => enterExam(e.examId)}
-                  >
-                    <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
-                      {e.title}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#888" }}>
-                      {e.examId} · {e.lang} · {e.questionCount} 题
-                      {e.hasAnswers ? (
-                        <span style={{ color: "#27AE60", marginLeft: 8 }}>
-                          ✓ 已绑定答案
-                        </span>
-                      ) : (
-                        <span style={{ color: "#E67E22", marginLeft: 8 }}>
-                          ⚠ 无答案（无法判分）
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                ))}
+                {displayExams.map((e) => {
+                  const done = completedExams.has(e.examId);
+                  return (
+                    <button
+                      key={e.examId}
+                      className="word-option"
+                      style={{
+                        textAlign: "left",
+                        padding: 14,
+                        height: "auto",
+                        opacity: done ? 0.6 : 1,
+                      }}
+                      onClick={() => enterExam(e.examId)}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
+                          {e.title}
+                          {done && (
+                            <span style={{ color: "#27AE60", marginLeft: 8 }}>
+                              <CheckIcon size={14} /> 已完成
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#888" }}>
+                        {e.examId} · {e.lang}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

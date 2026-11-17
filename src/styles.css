@@ -2360,3 +2360,175 @@ img {
   line-height: 1.65;
   color: var(--ink-faint);
 }
+
+/* ===== 关卡难度分组 ===== */
+.difficulty-section {
+  margin-bottom: 28px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 18px 20px 22px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+}
+
+.difficulty-section.locked {
+  opacity: 0.55;
+  filter: grayscale(0.3);
+}
+
+.difficulty-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 2px solid;
+}
+
+.difficulty-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.diff-badge {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 8px;
+}
+
+.diff-name {
+  font-size: 15px;
+  color: #555;
+}
+
+.diff-done {
+  font-size: 12px;
+  color: #27ae60;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.difficulty-lock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #999;
+}
+
+.difficulty-empty {
+  padding: 20px;
+  text-align: center;
+}
+
+.level-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.level-card {
+  position: relative;
+  border: 2px solid #e8e8e8;
+  border-radius: 12px;
+  padding: 14px;
+  background: #fafafa;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 90px;
+}
+
+.level-card:hover:not(:disabled) {
+  border-color: var(--accent, #2f86d6);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+}
+
+.level-card.completed {
+  border-color: #27ae60;
+  background: #f0faf3;
+}
+
+.level-card.locked {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.level-card-body {
+  flex: 1;
+}
+
+.level-card-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #333;
+}
+
+.level-card-desc {
+  font-size: 12px;
+  color: #888;
+  margin-top: 4px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.level-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.level-go {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent, #2f86d6);
+}
+
+.level-lock-text {
+  font-size: 12px;
+  color: #999;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.level-stars {
+  font-size: 14px;
+  letter-spacing: 1px;
+}
+
+.level-stars .star.on {
+  color: #f5a623;
+}
+
+.level-stars .star {
+  color: #ddd;
+}
+
+.level-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #27ae60;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
