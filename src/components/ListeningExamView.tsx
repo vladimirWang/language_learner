@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   loadListeningManifest,
   resolveListeningPath,
@@ -49,6 +49,7 @@ export default function ListeningExamView({
   const [answers, setAnswers] = useState<AnswerState>({});
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
   const [finished, setFinished] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   // 关卡模式：用传入的 exams；自由模式：扫描本地素材
   const displayExams = isLevelMode
@@ -151,6 +152,14 @@ export default function ListeningExamView({
     return { correct, total };
   }, [manifest, answers]);
 
+  const allQuestionsCorrect = useMemo(
+    () =>
+      !!manifest &&
+      manifest.questions.length > 0 &&
+      manifest.questions.every((q) => !!q.answer && answers[q.number] === q.answer),
+    [manifest, answers],
+  );
+
   const pick = (letter: string) => {
     if (!question) return;
     const num = question.number;
@@ -178,9 +187,11 @@ export default function ListeningExamView({
       setCurrent((c) => c + 1);
     } else {
       setFinished(true);
-      sfx.win();
-      // 关卡模式：标记 exam 完成
-      if (isLevelMode && examId) {
+      // 关卡模式下，只有当前 exam 的所有题目都答对才计入完成。
+      if (!isLevelMode || allQuestionsCorrect) {
+        sfx.win();
+      }
+      if (isLevelMode && examId && allQuestionsCorrect) {
         setCompletedExams((prev) => {
           const next = new Set(prev);
           next.add(examId);
@@ -357,13 +368,18 @@ export default function ListeningExamView({
       <div className="play-screen">
         <div className="play-body">
           <div className="empty-card" style={{ maxWidth: 420 }}>
-            <h2>完成啦</h2>
+            <h2>{isLevelMode ? (allQuestionsCorrect ? "本套全部答对" : "尚未通过") : "完成啦"}</h2>
             {score.total > 0 ? (
               <p>
                 你答对了 {score.correct} / {score.total} 题
               </p>
             ) : (
               <p>这套题还没有绑定官方答案，只能自己对照。</p>
+            )}
+            {isLevelMode && !allQuestionsCorrect && (
+              <p style={{ color: "#C0392B" }}>
+                所有题目都答对才会计入关卡完成，请重新做一遍。
+              </p>
             )}
             <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
               <button className="btn ghost" onClick={leaveExam}>
@@ -442,7 +458,7 @@ export default function ListeningExamView({
             <h2>听音频，选一个正确答案</h2>
           </div>
 
-          {/* 题干画面（视频抽帧 + OCR） */}
+          {/* 题干画面（视频抽帧） */}
           <div style={{ textAlign: "center", marginBottom: 16 }}>
             {imageUrls[num] ? (
               <img
@@ -470,22 +486,6 @@ export default function ListeningExamView({
                 无画面
               </div>
             )}
-            {question.ocrText && (
-              <div
-                style={{
-                  marginTop: 10,
-                  textAlign: "left",
-                  background: "#FAFAFA",
-                  padding: 10,
-                  borderRadius: 8,
-                  fontSize: 13,
-                  color: "#555",
-                  lineHeight: 1.6,
-                }}
-              >
-                {question.ocrText}
-              </div>
-            )}
           </div>
 
           {/* 音频播放器 */}
@@ -496,14 +496,32 @@ export default function ListeningExamView({
                 padding: 14,
                 borderRadius: 10,
                 marginBottom: 20,
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
               }}
             >
               <audio
+                ref={audioRef}
                 src={audioUrls[num]}
                 controls
-                style={{ width: "100%" }}
+                style={{ width: "100%", minWidth: 0, flex: 1 }}
                 preload="metadata"
               />
+              <button
+                type="button"
+                className="speak-btn small"
+                title="重新播放"
+                aria-label="重新播放"
+                onClick={() => {
+                  const audio = audioRef.current;
+                  if (!audio) return;
+                  audio.currentTime = 0;
+                  void audio.play().catch(() => {});
+                }}
+              >
+                <SpeakerIcon size={18} />
+              </button>
             </div>
           ) : (
             <div
@@ -606,21 +624,6 @@ export default function ListeningExamView({
             </details>
           )}
 
-          {/* 音频重播按钮 */}
-          <div style={{ textAlign: "center", marginTop: 12 }}>
-            <button
-              className="speak-btn small"
-              onClick={() => {
-                const a = document.querySelector<HTMLAudioElement>("audio");
-                if (a) {
-                  a.currentTime = 0;
-                  a.play().catch(() => {});
-                }
-              }}
-            >
-              <SpeakerIcon size={18} />
-            </button>
-          </div>
         </section>
       </div>
     </div>
