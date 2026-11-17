@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import MapScreen from "./components/MapScreen";
 import LevelPlay from "./components/LevelPlay";
 import AgentChat from "./components/AgentChat";
+import ListeningExamView from "./components/ListeningExamView";
 import { COURSES } from "./game/courses";
 import {
   emptyProgress,
@@ -10,7 +11,7 @@ import {
   type Progress,
 } from "./game/progress";
 
-type View = "map" | "agent";
+type View = "map" | "agent" | "listening";
 
 export default function App() {
   const [progress, setProgress] = useState<Progress>(() => loadProgress());
@@ -70,6 +71,8 @@ export default function App() {
           onComplete={handleComplete}
           onNext={goNext}
         />
+      ) : view === "listening" ? (
+        <ListeningExamView onExit={() => setView("map")} />
       ) : view === "agent" ? (
         <AgentChat onExit={() => setView("map")} />
       ) : (
@@ -78,6 +81,7 @@ export default function App() {
           freshIndex={freshIndex}
           onSelect={setActiveIndex}
           onOpenAgent={() => setView("agent")}
+          onOpenListening={() => setView("listening")}
           onReset={resetProgress}
         />
       )}

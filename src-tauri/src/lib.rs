@@ -1,4 +1,5 @@
 mod agent;
+mod listening;
 mod materials;
 mod quiz;
 
@@ -9,7 +10,10 @@ pub fn run() {
             agent::grade_dialogue_answer,
             quiz::generate_quiz,
             materials::check_material_update,
-            materials::apply_material_update
+            materials::apply_material_update,
+            listening::scan_listening_exams,
+            listening::load_listening_manifest,
+            listening::listening_resolve_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

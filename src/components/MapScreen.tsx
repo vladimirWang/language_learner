@@ -45,6 +45,7 @@ type Props = {
   freshIndex: number | null;
   onSelect: (index: number) => void;
   onOpenAgent: () => void;
+  onOpenListening: () => void;
   onReset: () => void;
 };
 
@@ -53,6 +54,7 @@ export default function MapScreen({
   freshIndex,
   onSelect,
   onOpenAgent,
+  onOpenListening,
   onReset,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -96,6 +98,9 @@ export default function MapScreen({
         </div>
         <div className="header-actions">
           <MaterialUpdate />
+          <button className="agent-entry" onClick={onOpenListening} title="听力题练习">
+            🎧 听力导入
+          </button>
           <button className="agent-entry" onClick={onOpenAgent}>
             <SparkleIcon size={16} color="#fff" />
             Agent 练习
