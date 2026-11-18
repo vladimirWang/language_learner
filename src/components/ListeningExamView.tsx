@@ -289,7 +289,7 @@ export default function ListeningExamView({
         <div className="play-body">
           <div style={{ width: "100%", maxWidth: 720 }}>
             <h2 style={{ marginBottom: 8 }}>
-              {isLevelMode ? `${level!.name} · ${level!.difficulty}` : "本地听力素材"}
+              {isLevelMode ? `综合练习 · ${level!.name}` : "本地听力素材"}
             </h2>
             {isLevelMode && level!.description && (
               <p style={{ color: "#888", marginBottom: 24 }}>{level!.description}</p>

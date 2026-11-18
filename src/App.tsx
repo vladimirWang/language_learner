@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import MapScreen from "./components/MapScreen";
 import AgentChat from "./components/AgentChat";
 import ListeningExamView from "./components/ListeningExamView";
-import SpeakingExamView from "./components/SpeakingExamView";
 import {
   emptyProgress,
   loadProgress,
@@ -12,7 +11,7 @@ import {
 } from "./game/progress";
 import { fetchLevelDetail, fetchLevels, type Level, type LevelDetail } from "./game/levels";
 
-type View = "map" | "agent" | "listening" | "speaking" | "level";
+type View = "map" | "agent" | "level";
 
 export default function App() {
   const [levels, setLevels] = useState<Level[]>([]);
@@ -83,10 +82,6 @@ export default function App() {
           onExit={goMap}
           onLevelComplete={handleLevelComplete}
         />
-      ) : view === "listening" ? (
-        <ListeningExamView onExit={() => setView("map")} />
-      ) : view === "speaking" ? (
-        <SpeakingExamView onExit={() => setView("map")} />
       ) : view === "agent" ? (
         <AgentChat onExit={() => setView("map")} />
       ) : (
@@ -97,8 +92,6 @@ export default function App() {
           onSelectLevel={handleSelectLevel}
           onRefresh={loadLevels}
           onOpenAgent={() => setView("agent")}
-          onOpenListening={() => setView("listening")}
-          onOpenSpeaking={() => setView("speaking")}
           onReset={resetProgress}
         />
       )}

@@ -27,8 +27,6 @@ type Props = {
   onSelectLevel: (level: Level) => void
   onRefresh?: () => void
   onOpenAgent: () => void
-  onOpenListening: () => void
-  onOpenSpeaking: () => void
   onReset: () => void
 }
 
@@ -39,8 +37,6 @@ export default function MapScreen({
   onSelectLevel,
   onRefresh,
   onOpenAgent,
-  onOpenListening,
-  onOpenSpeaking,
   onReset,
 }: Props) {
   const groups = useMemo(() => groupByDifficulty(levels), [levels])
@@ -62,8 +58,8 @@ export default function MapScreen({
     <div className="map-screen">
       <header className="map-header">
         <div className="brand">
-          <h1 className="brand-title">听力闯关</h1>
-          <p className="brand-sub">完成低难度全部关卡，解锁下一难度</p>
+          <h1 className="brand-title">综合练习</h1>
+          <p className="brand-sub">听力 + 口语闯关，完成低难度全部关卡解锁下一难度</p>
         </div>
         <div className="header-actions">
           {onRefresh && (
@@ -78,12 +74,6 @@ export default function MapScreen({
             </button>
           )}
           <MaterialUpdate />
-          <button className="agent-entry" onClick={onOpenListening} title="自由练习">
-            🎧 自由练习
-          </button>
-          <button className="agent-entry" onClick={onOpenSpeaking} title="口语练习">
-            🗣 口语练习
-          </button>
           <button className="agent-entry" onClick={onOpenAgent}>
             <SparkleIcon size={16} color="#fff" />
             Agent 练习
