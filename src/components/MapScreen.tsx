@@ -27,6 +27,7 @@ type Props = {
   onSelectLevel: (level: Level) => void
   onRefresh?: () => void
   onOpenAgent: () => void
+  onOpenExam: () => void
   onReset: () => void
 }
 
@@ -37,6 +38,7 @@ export default function MapScreen({
   onSelectLevel,
   onRefresh,
   onOpenAgent,
+  onOpenExam,
   onReset,
 }: Props) {
   const groups = useMemo(() => groupByDifficulty(levels), [levels])
@@ -74,6 +76,9 @@ export default function MapScreen({
             </button>
           )}
           <MaterialUpdate />
+          <button className="agent-entry" onClick={onOpenExam}>
+            德专四级 PGG
+          </button>
           <button className="agent-entry" onClick={onOpenAgent}>
             <SparkleIcon size={16} color="#fff" />
             Agent 练习
