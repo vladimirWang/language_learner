@@ -3,9 +3,9 @@
 const API_BASE = (import.meta as unknown as { env?: { VITE_API_BASE?: string } }).env
   ?.VITE_API_BASE ?? "http://127.0.0.1:8080"
 
-export type SpeakingLevel = "A1" | "A2" | "B1" | "B2"
+export type SpeakingLevel = "A1" | "A2" | "B1" | "B2" | "C1" | "C2"
 
-export const SPEAKING_LEVELS: SpeakingLevel[] = ["A1", "A2", "B1", "B2"]
+export const SPEAKING_LEVELS: SpeakingLevel[] = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
 export interface SpeakingItem {
   item_key: string

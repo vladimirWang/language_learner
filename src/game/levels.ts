@@ -16,6 +16,8 @@ export const DIFFICULTY_LABELS: Record<Difficulty, string> = {
 
 export interface LevelExam {
   exam_id: string
+  item_type: "listening" | "speaking"
+  name?: string
   lang: string
   source_url: string
   sort_order: number

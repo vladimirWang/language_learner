@@ -16,6 +16,10 @@ import { ArrowLeftIcon, CheckIcon } from "./icons";
 
 type Props = {
   onExit: () => void;
+  /** 关卡模式：只练习这些口语题目 */
+  presetKeys?: string[];
+  presetTitle?: string;
+  onAllComplete?: () => void;
 };
 
 const LEVEL_COLORS: Record<SpeakingLevel, string> = {
@@ -23,9 +27,12 @@ const LEVEL_COLORS: Record<SpeakingLevel, string> = {
   A2: "#2F86D6",
   B1: "#FF8A3D",
   B2: "#F2588E",
+  C1: "#8E44AD",
+  C2: "#6C3483",
 };
 
-export default function SpeakingView({ onExit }: Props) {
+export default function SpeakingView({ onExit, presetKeys, presetTitle, onAllComplete }: Props) {
+  const isPreset = !!presetKeys;
   const [items, setItems] = useState<SpeakingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,10 +61,13 @@ export default function SpeakingView({ onExit }: Props) {
     load();
   }, []);
 
-  const levelItems = useMemo(
-    () => items.filter((it) => it.level === level),
-    [items, level],
-  );
+  const levelItems = useMemo(() => {
+    if (presetKeys) {
+      const keys = new Set(presetKeys);
+      return items.filter((it) => keys.has(it.item_key));
+    }
+    return items.filter((it) => it.level === level);
+  }, [items, level, presetKeys]);
 
   const current = levelItems[index] ?? null;
 
@@ -93,6 +103,7 @@ export default function SpeakingView({ onExit }: Props) {
     } else {
       setFinished(true);
       sfx.win();
+      if (isPreset) onAllComplete?.();
     }
   };
 
@@ -113,7 +124,7 @@ export default function SpeakingView({ onExit }: Props) {
           返回
         </button>
         <span className="level-chip" style={{ background: "#7C5CBF" }}>
-          口语练习 · 脚本模式
+          {isPreset ? presetTitle ?? "口语练习" : "口语练习 · 脚本模式"}
         </span>
         <span className="quiz-count">
           已完成 {doneCount} / {levelItems.length}
@@ -126,27 +137,29 @@ export default function SpeakingView({ onExit }: Props) {
             机器批改仅用于练习辅助，不能替代歌德官方人工口试。
           </p>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
-            {SPEAKING_LEVELS.map((lv) => {
-              const count = items.filter((it) => it.level === lv).length;
-              const active = lv === level;
-              return (
-                <button
-                  key={lv}
-                  className="btn ghost"
-                  disabled={count === 0}
-                  onClick={() => resetLevel(lv)}
-                  style={{
-                    background: active ? LEVEL_COLORS[lv] : undefined,
-                    color: active ? "#fff" : undefined,
-                    opacity: count === 0 ? 0.4 : 1,
-                  }}
-                >
-                  {lv} · {count} 题
-                </button>
-              );
-            })}
-          </div>
+          {!isPreset && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
+              {SPEAKING_LEVELS.map((lv) => {
+                const count = items.filter((it) => it.level === lv).length;
+                const active = lv === level;
+                return (
+                  <button
+                    key={lv}
+                    className="btn ghost"
+                    disabled={count === 0}
+                    onClick={() => resetLevel(lv)}
+                    style={{
+                      background: active ? LEVEL_COLORS[lv] : undefined,
+                      color: active ? "#fff" : undefined,
+                      opacity: count === 0 ? 0.4 : 1,
+                    }}
+                  >
+                    {lv} · {count} 题
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {loading && <p style={{ color: "#8a7d6b" }}>正在加载口语题库…</p>}
 
@@ -182,7 +195,7 @@ export default function SpeakingView({ onExit }: Props) {
               }}
             >
               <h2 style={{ marginTop: 0 }}>
-                <CheckIcon size={20} /> 本等级练习完成
+                <CheckIcon size={20} /> {isPreset ? "口语部分完成" : "本等级练习完成"}
               </h2>
               <p style={{ color: "#6b6156" }}>
                 共完成 {levelItems.length} 题，累计已练习 {doneCount} 题。
@@ -191,8 +204,8 @@ export default function SpeakingView({ onExit }: Props) {
                 <button className="btn primary" onClick={restart}>
                   再来一轮
                 </button>
-                <button className="btn ghost" onClick={onExit}>
-                  返回地图
+                <button className="btn ghost" onClick={isPreset ? onAllComplete : onExit}>
+                  {isPreset ? "返回关卡" : "返回地图"}
                 </button>
               </div>
             </div>
