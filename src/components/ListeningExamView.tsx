@@ -56,6 +56,7 @@ export default function ListeningExamView({
   const [answers, setAnswers] = useState<AnswerState>({});
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
   const [finished, setFinished] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // 关卡模式：听力 exam 与口语题目按配置顺序混合展示
@@ -750,27 +751,29 @@ export default function ListeningExamView({
             </button>
           </div>
 
-          {/* 原文（可折叠展示） */}
-          {isRevealed && question.transcript && (
-            <details style={{ marginTop: 16 }}>
-              <summary style={{ cursor: "pointer", color: "#888", fontSize: 13 }}>
-                查看音频转写原文
-              </summary>
-              <p
-                style={{
-                  marginTop: 8,
-                  fontSize: 13,
-                  color: "#555",
-                  background: "#FAFAFA",
-                  padding: 10,
-                  borderRadius: 8,
-                  lineHeight: 1.7,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {question.transcript}
-              </p>
-            </details>
+          {/* 转写原文：作答前后均可独立开关 */}
+          {question.transcript && (
+            <div style={{ marginTop: 16 }}>
+              <button className="btn ghost" onClick={() => setShowTranscript((value) => !value)}>
+                {showTranscript ? "隐藏转写原文" : "显示转写原文"}
+              </button>
+              {showTranscript && (
+                <p
+                  style={{
+                    marginTop: 8,
+                    fontSize: 13,
+                    color: "#555",
+                    background: "#FAFAFA",
+                    padding: 10,
+                    borderRadius: 8,
+                    lineHeight: 1.7,
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {question.transcript}
+                </p>
+              )}
+            </div>
           )}
 
         </section>
