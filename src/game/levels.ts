@@ -69,9 +69,9 @@ export function fetchLevels(): Promise<Level[]> {
   return request<LevelsResponse>("/api/levels?active_only=true").then((r) => r.levels)
 }
 
-/** 拉取单个关卡详情（含关联的 exam 列表） */
+/** 拉取单个关卡详情（含关联内容；口语话题展开为逐题，便于闯关） */
 export function fetchLevelDetail(id: number): Promise<LevelDetail> {
-  return request<LevelDetailResponse>(`/api/levels/${id}`)
+  return request<LevelDetailResponse>(`/api/levels/${id}?expand_speaking=1`)
 }
 
 /** 按难度分组关卡 */
