@@ -16,7 +16,7 @@ export const DIFFICULTY_LABELS: Record<Difficulty, string> = {
 
 export interface LevelExam {
   exam_id: string
-  item_type: "listening" | "speaking"
+  item_type: "listening" | "speaking" | "speaking_topic"
   name?: string
   lang: string
   source_url: string
@@ -69,9 +69,9 @@ export function fetchLevels(): Promise<Level[]> {
   return request<LevelsResponse>("/api/levels?active_only=true").then((r) => r.levels)
 }
 
-/** 拉取单个关卡详情（含关联内容；口语话题展开为逐题，便于闯关） */
+/** 拉取单个关卡详情（含关联内容；口语以话题为单位返回） */
 export function fetchLevelDetail(id: number): Promise<LevelDetail> {
-  return request<LevelDetailResponse>(`/api/levels/${id}?expand_speaking=1`)
+  return request<LevelDetailResponse>(`/api/levels/${id}`)
 }
 
 /** 按难度分组关卡 */
