@@ -39,9 +39,9 @@ export default function ListeningExamView({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedExams, setCompletedExams] = useState<Set<string>>(new Set());
-  // 关卡内口语部分：完成整套口语题后记为完成
-  const [speakingOpen, setSpeakingOpen] = useState(false);
-  const [speakingDone, setSpeakingDone] = useState(false);
+  // 关卡内口语题：逐题完成，全部完成才计入关卡完成
+  const [speakingKey, setSpeakingKey] = useState<string | null>(null);
+  const [completedSpeaking, setCompletedSpeaking] = useState<Set<string>>(new Set());
 
   // 加载 manifest + 预解析文件 URL
   const [manifest, setManifest] = useState<ListeningManifest | null>(null);
@@ -55,20 +55,32 @@ export default function ListeningExamView({
   const [finished, setFinished] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // 关卡模式：分为听力 exam 与口语题目两类
-  const levelListeningExams = (levelExams ?? []).filter((e) => e.item_type !== "speaking");
-  const levelSpeakingExams = (levelExams ?? []).filter((e) => e.item_type === "speaking");
+  // 关卡模式：听力 exam 与口语题目按配置顺序混合展示
+  const levelRows = useMemo(
+    () =>
+      [...(levelExams ?? [])]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((e) => ({
+          key: `${e.item_type}-${e.exam_id}`,
+          examId: e.exam_id,
+          itemType: e.item_type === "speaking" ? ("speaking" as const) : ("listening" as const),
+          title: e.name || e.exam_id,
+          lang: e.lang,
+        })),
+    [levelExams],
+  );
 
-  // 关卡模式：用传入的听力 exams；自由模式：扫描本地素材
   const displayExams = isLevelMode
-    ? levelListeningExams.map((e) => ({
-        examId: e.exam_id,
-        title: e.name || e.exam_id,
-        lang: e.lang,
-        questionCount: 0,
-        baseDir: "",
-        hasAnswers: true,
-      }))
+    ? levelRows
+        .filter((e) => e.itemType === "listening")
+        .map((e) => ({
+          examId: e.examId,
+          title: e.title,
+          lang: e.lang,
+          questionCount: 0,
+          baseDir: "",
+          hasAnswers: true,
+        }))
     : exams;
 
   const reload = async () => {
@@ -224,24 +236,30 @@ export default function ListeningExamView({
   };
 
   const allExamsDone = isLevelMode
-    ? (levelExams ?? []).length > 0 &&
-      levelListeningExams.every((e) => completedExams.has(e.exam_id)) &&
-      (levelSpeakingExams.length === 0 || speakingDone)
+    ? levelRows.length > 0 &&
+      levelRows.every((row) =>
+        row.itemType === "speaking"
+          ? completedSpeaking.has(row.examId)
+          : completedExams.has(row.examId),
+      )
     : false;
 
-  const levelDoneCount =
-    completedExams.size + (speakingDone ? levelSpeakingExams.length : 0);
+  const levelDoneCount = completedExams.size + completedSpeaking.size;
 
-  // 关卡内打开口语部分
-  if (isLevelMode && speakingOpen) {
+  // 关卡内打开单条口语题
+  if (isLevelMode && speakingKey) {
     return (
       <SpeakingView
-        presetKeys={levelSpeakingExams.map((e) => e.exam_id)}
+        presetKeys={[speakingKey]}
         presetTitle={`${level!.name} · 口语`}
-        onExit={() => setSpeakingOpen(false)}
+        onExit={() => setSpeakingKey(null)}
         onAllComplete={() => {
-          setSpeakingDone(true);
-          setSpeakingOpen(false);
+          setCompletedSpeaking((prev) => {
+            const next = new Set(prev);
+            next.add(speakingKey);
+            return next;
+          });
+          setSpeakingKey(null);
         }}
       />
     );
@@ -299,7 +317,7 @@ export default function ListeningExamView({
 
             {loading && <div>扫描中…</div>}
 
-            {!loading && displayExams && displayExams.length === 0 && levelSpeakingExams.length === 0 && (
+            {!loading && isLevelMode && levelRows.length === 0 && (
               <div
                 style={{
                   background: "#FFF8E1",
@@ -308,14 +326,23 @@ export default function ListeningExamView({
                   border: "1px dashed #F0A04B",
                 }}
               >
-                <p style={{ fontWeight: 600, marginBottom: 8 }}>
-                  {isLevelMode ? "该关卡还没有关联听力素材" : "还没有听力素材哦"}
+                <p style={{ fontWeight: 600, marginBottom: 8 }}>该关卡还没有关联任何题目</p>
+              </div>
+            )}
+
+            {!loading && !isLevelMode && displayExams && displayExams.length === 0 && (
+              <div
+                style={{
+                  background: "#FFF8E1",
+                  padding: "18px",
+                  borderRadius: 10,
+                  border: "1px dashed #F0A04B",
+                }}
+              >
+                <p style={{ fontWeight: 600, marginBottom: 8 }}>还没有听力素材哦</p>
+                <p style={{ color: "#666", fontSize: 13, lineHeight: 1.6 }}>
+                  <code>LISTENING_DATA_DIR</code> 指向的目录里还没有 <code>manifest.json</code>。
                 </p>
-                {!isLevelMode && (
-                  <p style={{ color: "#666", fontSize: 13, lineHeight: 1.6 }}>
-                    <code>LISTENING_DATA_DIR</code> 指向的目录里还没有 <code>manifest.json</code>。
-                  </p>
-                )}
               </div>
             )}
 
@@ -330,7 +357,7 @@ export default function ListeningExamView({
                 }}
               >
                 <p style={{ fontWeight: 600, color: "#27AE60", marginBottom: 8 }}>
-                  🎉 恭喜！你已完成本关卡所有听力素材
+                  🎉 恭喜！你已完成本关卡所有题目
                 </p>
                 <button className="btn primary" onClick={() => onLevelComplete?.()}>
                   返回地图
@@ -338,7 +365,52 @@ export default function ListeningExamView({
               </div>
             )}
 
-            {!loading && displayExams && displayExams.length > 0 && (
+            {!loading && isLevelMode && levelRows.length > 0 && (
+              <div className="word-grid" style={{ gridTemplateColumns: "1fr" }}>
+                {levelRows.map((row) => {
+                  const done =
+                    row.itemType === "speaking"
+                      ? completedSpeaking.has(row.examId)
+                      : completedExams.has(row.examId);
+                  return (
+                    <button
+                      key={row.key}
+                      className="word-option"
+                      style={{
+                        textAlign: "left",
+                        padding: 14,
+                        height: "auto",
+                        opacity: done ? 0.6 : 1,
+                      }}
+                      onClick={() =>
+                        row.itemType === "speaking"
+                          ? setSpeakingKey(row.examId)
+                          : enterExam(row.examId)
+                      }
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
+                          {row.itemType === "speaking" && (
+                            <span style={{ color: "#7C5CBF", marginRight: 6 }}>🗣</span>
+                          )}
+                          {row.title}
+                          {done && (
+                            <span style={{ color: "#27AE60", marginLeft: 8 }}>
+                              <CheckIcon size={14} /> 已完成
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#888" }}>
+                        {row.itemType === "speaking" ? "口语" : "听力"} · {row.examId} · {row.lang}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {!loading && !isLevelMode && displayExams && displayExams.length > 0 && (
               <div className="word-grid" style={{ gridTemplateColumns: "1fr" }}>
                 {displayExams.map((e) => {
                   const done = completedExams.has(e.examId);
@@ -371,35 +443,6 @@ export default function ListeningExamView({
                   );
                 })}
               </div>
-            )}
-
-            {isLevelMode && levelSpeakingExams.length > 0 && (
-              <button
-                className="word-option"
-                style={{
-                  textAlign: "left",
-                  padding: 14,
-                  height: "auto",
-                  marginTop: 12,
-                  opacity: speakingDone ? 0.6 : 1,
-                }}
-                onClick={() => setSpeakingOpen(true)}
-              >
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
-                  🗣 口语练习
-                  <span style={{ color: "#7C5CBF", marginLeft: 8 }}>
-                    {levelSpeakingExams.length} 题
-                  </span>
-                  {speakingDone && (
-                    <span style={{ color: "#27AE60", marginLeft: 8 }}>
-                      <CheckIcon size={14} /> 已完成
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: 12, color: "#888" }}>
-                  {levelSpeakingExams.map((e) => e.name || e.exam_id).join(" · ")}
-                </div>
-              </button>
             )}
           </div>
         </div>

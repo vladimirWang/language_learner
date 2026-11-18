@@ -131,3 +131,89 @@ export function saveSpeakingProgress(progress: SpeakingProgress): void {
     // 本地存储不可用时忽略
   }
 }
+
+// ---------------------------------------------------------------------------
+// 受控追问 / 搭档回应（后端优先 LLM，异常回退模板）
+// ---------------------------------------------------------------------------
+
+export interface SpeakingTurn {
+  role: "user" | "examiner" | "partner"
+  text: string
+}
+
+export interface SpeakingReplyParams {
+  level: string
+  examPart: string
+  topic: string
+  role: "examiner" | "partner"
+  history: SpeakingTurn[]
+  followupCount: number
+  promptDE: string
+}
+
+/** 请求下一句考官追问或搭档回应；失败时返回空串由调用方兜底。 */
+export async function fetchSpeakingReply(params: SpeakingReplyParams): Promise<string> {
+  try {
+    const res = await fetch(`${API_BASE}/api/speaking/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        lang: "de",
+        level: params.level,
+        exam_part: params.examPart,
+        topic: params.topic,
+        role: params.role,
+        history: params.history.slice(-8),
+        followup_count: params.followupCount,
+        prompt_de: params.promptDE,
+      }),
+    })
+    if (!res.ok) return ""
+    const body = (await res.json()) as { reply?: string }
+    return (body.reply ?? "").trim()
+  } catch {
+    return ""
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 会话报告（仅存本地，不上传）
+// ---------------------------------------------------------------------------
+
+const SESSION_KEY = "speaking.sessions.v1"
+
+export interface SpeakingSessionReport {
+  id: string
+  level: string
+  started_at: string
+  ended_at: string
+  duration_sec: number
+  parts: string[]
+  turn_count: number
+  items_total: number
+  items_completed: number
+  points_total: number
+  points_covered: number
+  missing_points: string[]
+  suggested_review: string
+}
+
+export function loadSpeakingSessions(): SpeakingSessionReport[] {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as SpeakingSessionReport[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveSpeakingSession(report: SpeakingSessionReport): void {
+  try {
+    const list = [report, ...loadSpeakingSessions()].slice(0, 20)
+    localStorage.setItem(SESSION_KEY, JSON.stringify(list))
+  } catch {
+    // 本地存储不可用时忽略
+  }
+}

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import MapScreen from "./components/MapScreen";
 import AgentChat from "./components/AgentChat";
 import ListeningExamView from "./components/ListeningExamView";
-import SpeakingView from "./components/SpeakingView";
+import SpeakingExamView from "./components/SpeakingExamView";
 import {
   emptyProgress,
   loadProgress,
@@ -86,7 +86,7 @@ export default function App() {
       ) : view === "listening" ? (
         <ListeningExamView onExit={() => setView("map")} />
       ) : view === "speaking" ? (
-        <SpeakingView onExit={() => setView("map")} />
+        <SpeakingExamView onExit={() => setView("map")} />
       ) : view === "agent" ? (
         <AgentChat onExit={() => setView("map")} />
       ) : (
