@@ -314,66 +314,6 @@ export async function fetchSpeakingReply(
 
 const SESSION_KEY = "speaking.sessions.v1"
 
-export interface TopicPlanRound {
-  order: number
-  question_de: string
-  question_zh?: string
-  item_key?: string
-  expected_points: string[]
-  ref_answer?: string
-  /** anchor：素材题；bridge：服务端补足的衔接追问 */
-  kind: "anchor" | "bridge"
-}
-
-export interface TopicPlan {
-  lang: string
-  level: string
-  topic: string
-  min_rounds: number
-  rounds: TopicPlanRound[]
-  source: "llm" | "template"
-}
-
-/** 拉取主题对话脚本：服务端会把话题下的语料串成至少 5 轮。 */
-export async function fetchTopicPlan(params: {
-  level: string
-  topic: string
-  minRounds?: number
-}): Promise<TopicPlan> {
-  const res = await fetch(`${API_BASE}/api/speaking/topic-plan`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      lang: "de",
-      level: params.level,
-      topic: params.topic,
-      min_rounds: params.minRounds ?? 5,
-    }),
-  })
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`
-    try {
-      const body = (await res.json()) as { error?: string }
-      if (body.error) msg = body.error
-    } catch {
-      // ignore
-    }
-    throw new Error(msg)
-  }
-  const body = (await res.json()) as Partial<TopicPlan>
-  return {
-    lang: body.lang ?? "de",
-    level: body.level ?? params.level,
-    topic: body.topic ?? params.topic,
-    min_rounds: body.min_rounds ?? 5,
-    rounds: Array.isArray(body.rounds)
-      ? body.rounds.map((r) => ({ ...r, expected_points: r.expected_points ?? [] }))
-      : [],
-    source: body.source === "llm" ? "llm" : "template",
-  }
-}
-
-
 export interface SpeakingItemResult {
   item_key: string
   prompt_de: string

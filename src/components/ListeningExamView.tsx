@@ -10,7 +10,7 @@ import {
 import type { Level, LevelExam } from "../game/levels";
 import { sfx } from "../game/audio";
 import SpeakingView from "./SpeakingView";
-import TopicSpeakingView from "./TopicSpeakingView";
+import SpeakingExamView from "./SpeakingExamView";
 import { ArrowLeftIcon, CheckIcon, SpeakerIcon } from "./icons";
 
 type Props = {
@@ -253,17 +253,15 @@ export default function ListeningExamView({
 
   const levelDoneCount = completedExams.size + completedSpeaking.size;
 
-  // 关卡内打开口语主题对话
+  // 关卡内打开口语考试：按等级执行歌德考试流程（A1/A2 内置蓝图，B1/B2 用题库）
   if (isLevelMode && topicKey) {
     return (
-      <TopicSpeakingView
-        level={level!.difficulty}
+      <SpeakingExamView
+        initialLevel={level!.difficulty}
         topic={topicKey}
-        title={level!.name}
         onExit={() => setTopicKey(null)}
-        onComplete={() => {
+        onFinish={() => {
           setCompletedSpeaking((prev) => new Set(prev).add(topicKey));
-          setTopicKey(null);
         }}
       />
     );
@@ -430,7 +428,7 @@ export default function ListeningExamView({
                       </div>
                       <div style={{ fontSize: 12, color: "#888" }}>
                         {row.itemType === "speaking_topic"
-                          ? `口语话题 · 至少 5 轮对话 · ${row.lang}`
+                          ? `口语考试 · ${level?.difficulty ?? ""} 歌德形式 · ${row.lang}`
                           : row.itemType === "speaking"
                             ? `口语 · ${row.examId} · ${row.lang}`
                             : `听力 · ${row.examId} · ${row.lang}`}

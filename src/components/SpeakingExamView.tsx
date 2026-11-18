@@ -23,16 +23,35 @@ import {
   type SpeakingTurn,
 } from "../game/speaking";
 import { sfx } from "../game/audio";
+import {
+  EXAM_BLUEPRINTS,
+  usesBuiltinExam,
+  type ExamAid,
+  type ExamPartBlueprint,
+} from "../game/examBlueprint";
+import ExamAidPanel from "./ExamAidPanel";
 import { ArrowLeftIcon, CheckIcon } from "./icons";
 
 type Props = {
   onExit: () => void;
+  /** 从关卡进入时锁定等级，并直接开始考试 */
+  initialLevel?: SpeakingLevel;
+  /** 关卡中配置的口语话题（B1/B2 用作考试主题） */
+  topic?: string;
+  /** 完成整场考试后回调（用于标记关卡完成） */
+  onFinish?: () => void;
 };
 
 type Phase = "select" | "exam" | "report";
 
 interface PartGroup {
   key: string;
+  title: string;
+  mode: ExamPartBlueprint["mode"];
+  durationSec: number;
+  maxFollowups: number;
+  role: "examiner" | "partner";
+  aid?: ExamAid;
   items: SpeakingItem[];
 }
 
@@ -50,7 +69,6 @@ interface ChatMessage {
 }
 
 const PART_ORDER = ["part1_intro", "part2_presentation", "part3_discussion"];
-const MAX_FOLLOWUPS = 2;
 /** 发送给后端的最大历史消息数，覆盖整场考试（约 3 部分 × 多题），用于判重。 */
 const MAX_HISTORY_TURNS = 80;
 
@@ -62,10 +80,6 @@ const LEVEL_COLORS: Record<SpeakingLevel, string> = {
   C1: "#8E44AD",
   C2: "#6C3483",
 };
-
-function initialRole(item: SpeakingItem): "examiner" | "partner" {
-  return item.exam_part === "part3_discussion" && item.role === "partner" ? "partner" : "examiner";
-}
 
 const normalizeDE = (text: string) =>
   text
@@ -86,9 +100,34 @@ function wasAsked(prompt: string, history: ChatMessage[]): boolean {
   });
 }
 
-export default function SpeakingExamView({ onExit }: Props) {
+/** 把内置蓝图的一道题转换成与题库一致的结构，复用原有批改与报告逻辑。 */
+function blueprintItem(
+  level: SpeakingLevel,
+  part: ExamPartBlueprint,
+  prompt: { de: string; zh: string; topic: string },
+  index: number,
+  fallbackTopic: string,
+): SpeakingItem {
+  return {
+    item_key: `bp-${level}-${part.key}-${index}`,
+    lang: "de",
+    level,
+    exam_part: part.key,
+    topic: prompt.topic || fallbackTopic || level,
+    role: part.role,
+    prompt_de: prompt.de,
+    prompt_zh: prompt.zh,
+    expected_points: "[]",
+    ref_answer: "",
+    error_note: "",
+    sort_order: index,
+    active: true,
+  };
+}
+
+export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish }: Props) {
   const [phase, setPhase] = useState<Phase>("select");
-  const [level, setLevel] = useState<SpeakingLevel>("A1");
+  const [level, setLevel] = useState<SpeakingLevel>(initialLevel ?? "A1");
   const [items, setItems] = useState<SpeakingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -138,6 +177,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     fetchSpeakingItems({ lang: "de" })
       .then((list) => {
         setItems(list);
+        if (initialLevel) return;
         const first = SPEAKING_LEVELS.find((lv) => list.some((it) => it.level === lv));
         if (first) setLevel(first);
       })
@@ -153,14 +193,50 @@ export default function SpeakingExamView({ onExit }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, busy]);
 
-  const parts = useMemo<PartGroup[]>(
-    () =>
-      PART_ORDER.map((key) => ({
+  const blueprint = EXAM_BLUEPRINTS[level];
+  const builtinExam = usesBuiltinExam(level);
+
+  const parts = useMemo<PartGroup[]>(() => {
+    // A1/A2：完全按官方考试形式的内置蓝图，不依赖题库。
+    if (builtinExam) {
+      return (blueprint ?? [])
+        .filter((part) => (part.prompts ?? []).length > 0)
+        .map(
+          (part): PartGroup => ({
+            key: part.key,
+            title: part.title,
+            mode: part.mode,
+            durationSec: part.durationSec,
+            maxFollowups: part.maxFollowups,
+            role: part.role,
+            aid: part.aid,
+            items: (part.prompts ?? []).map((prompt, index) =>
+              blueprintItem(level, part, prompt, index, topic ?? ""),
+            ),
+          }),
+        );
+    }
+    // B1/B2：题目来自题库，蓝图只提供部分标题、时长与追问上限。
+    return PART_ORDER.map((key): PartGroup => {
+      const meta = (blueprint ?? []).find((part) => part.key === key);
+      return {
         key,
+        title: meta?.title ?? partLabel(key),
+        mode:
+          meta?.mode ??
+          (key === "part3_discussion"
+            ? "discussion"
+            : key === "part2_presentation"
+              ? "presentation"
+              : "intro"),
+        durationSec: meta?.durationSec ?? PART_TIME_LIMIT_SEC[key] ?? 240,
+        maxFollowups: meta?.maxFollowups ?? 2,
+        role: meta?.role ?? (key === "part3_discussion" ? "partner" : "examiner"),
+        aid: topic ? { kind: "topic", label: "本场考试主题", text: topic } : undefined,
         items: items.filter((it) => it.level === level && it.exam_part === key),
-      })).filter((part) => part.items.length > 0),
-    [items, level],
-  );
+      };
+    }).filter((part) => part.items.length > 0);
+  }, [items, level, topic, blueprint, builtinExam]);
 
   const currentPart = parts[partIndex] ?? null;
   const currentItem = currentPart?.items[itemIndex] ?? null;
@@ -203,7 +279,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     partStartedAt.current = Date.now();
     timedOutRef.current = false;
     setTimeUp(false);
-    setRemainingSec(PART_TIME_LIMIT_SEC[parts[0].key] ?? 240);
+    setRemainingSec(parts[0].durationSec);
     statsRef.current = {
       turns: 0,
       pointsTotal: 0,
@@ -224,7 +300,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     setExchanges(0);
     setReport(null);
     setPhase("exam");
-    pushMessage(initialRole(parts[0].items[0]), parts[0].items[0].prompt_de);
+    pushMessage(parts[0].role, parts[0].items[0].prompt_de);
     sfx.tap();
   };
 
@@ -281,8 +357,18 @@ export default function SpeakingExamView({ onExit }: Props) {
     saveSpeakingProgress({ completed: boosted });
     setReport(result);
     setPhase("report");
+    onFinish?.();
     sfx.win();
   };
+
+  // 从关卡进入时锁定等级，等蓝图/题库就绪后直接开考。
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!initialLevel || autoStarted.current || phase !== "select") return;
+    if (parts.length === 0) return;
+    autoStarted.current = true;
+    startExam();
+  }, [initialLevel, phase, parts]);
 
   /** 从 (fromPart, fromItem) 起找到第一道「问句还没出现过」的题；都问过则返回 null。 */
   const findNextUnasked = (fromPart: number, fromItem: number) => {
@@ -307,8 +393,8 @@ export default function SpeakingExamView({ onExit }: Props) {
     partStartedAt.current = Date.now();
     timedOutRef.current = false;
     setTimeUp(false);
-    setRemainingSec(PART_TIME_LIMIT_SEC[nextPart.key] ?? 240);
-    pushMessage(initialRole(nextItem), nextItem.prompt_de);
+    setRemainingSec(nextPart.durationSec);
+    pushMessage(nextPart.role, nextItem.prompt_de);
   };
 
   const advance = () => {
@@ -326,13 +412,13 @@ export default function SpeakingExamView({ onExit }: Props) {
     const nextItem = currentPart.items[next.item];
     setItemIndex(next.item);
     setExchanges(0);
-    pushMessage(initialRole(nextItem), nextItem.prompt_de);
+    pushMessage(currentPart.role, nextItem.prompt_de);
   };
 
   // 部分计时：到时只提示，不再自动提问；由考生决定继续作答还是进入下一部分。
   useEffect(() => {
     if (phase !== "exam" || !currentPart) return;
-    const limit = PART_TIME_LIMIT_SEC[currentPart.key] ?? 240;
+    const limit = currentPart.durationSec;
     const timer = window.setInterval(() => {
       const elapsed = Math.floor((Date.now() - partStartedAt.current) / 1000);
       const left = Math.max(0, limit - elapsed);
@@ -482,8 +568,8 @@ export default function SpeakingExamView({ onExit }: Props) {
     const nextExchange = exchanges + 1;
     setExchanges(nextExchange);
 
-    const isDiscussion = currentPart.key === "part3_discussion";
-    const maxExchanges = isDiscussion ? 2 : MAX_FOLLOWUPS + 1;
+    const isDiscussion = currentPart.mode === "discussion";
+    const maxExchanges = isDiscussion ? 2 : currentPart.maxFollowups + 1;
     if (nextExchange >= maxExchanges) {
       stats.itemsDone += 1;
       if (!stats.completedKeys.includes(currentItem.item_key)) {
@@ -502,7 +588,7 @@ export default function SpeakingExamView({ onExit }: Props) {
       );
       return;
     }
-    void requestReply(isDiscussion ? "partner" : "examiner", feedback);
+    void requestReply(currentPart.role, feedback);
   };
 
   const skipItem = () => {
@@ -539,6 +625,27 @@ export default function SpeakingExamView({ onExit }: Props) {
 
   // ========== 选择等级 ==========
   if (phase === "select") {
+    // 关卡内进入时无需选择等级，等待流程就绪。
+    if (initialLevel) {
+      return (
+        <div className="play-screen">
+          <div className="play-topbar">
+            <button className="back-btn" onClick={onExit}>
+              <ArrowLeftIcon size={18} />
+              返回
+            </button>
+            <span className="level-chip" style={{ background: "#7C5CBF" }}>
+              {initialLevel} 口语考试
+            </span>
+          </div>
+          <div className="play-body">
+            <p style={{ color: "#8a7d6b" }}>
+              {loading ? "正在准备考试…" : error ? `加载失败：${error}` : "正在准备考试…"}
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="play-screen">
         <div className="play-topbar">
@@ -571,19 +678,20 @@ export default function SpeakingExamView({ onExit }: Props) {
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
               {SPEAKING_LEVELS.map((lv) => {
                 const count = items.filter((it) => it.level === lv).length;
+                const builtin = usesBuiltinExam(lv);
                 return (
                   <button
                     key={lv}
                     className="btn ghost"
-                    disabled={count === 0}
+                    disabled={count === 0 && !builtin}
                     onClick={() => setLevel(lv)}
                     style={{
                       background: lv === level ? LEVEL_COLORS[lv] : undefined,
                       color: lv === level ? "#fff" : undefined,
-                      opacity: count === 0 ? 0.4 : 1,
+                      opacity: count === 0 && !builtin ? 0.4 : 1,
                     }}
                   >
-                    {lv} · {count} 题
+                    {builtin ? `${lv} · 官方流程` : `${lv} · ${count} 题`}
                   </button>
                 );
               })}
@@ -639,8 +747,8 @@ export default function SpeakingExamView({ onExit }: Props) {
                       }}
                     >
                       <span>
-                        {new Date(session.ended_at).toLocaleString("zh-CN")} · {session.level} · 覆盖{" "}
-                        {pct}% · {session.turn_count} 轮
+                        {new Date(session.ended_at).toLocaleString("zh-CN")} · {session.level}
+                        {session.points_total > 0 ? ` · 覆盖 ${pct}%` : ""} · {session.turn_count} 轮
                       </span>
                       <button
                         className="btn ghost"
@@ -698,13 +806,23 @@ export default function SpeakingExamView({ onExit }: Props) {
               用时 {Math.floor(report.duration_sec / 60)} 分 {report.duration_sec % 60} 秒 · 回答{" "}
               {report.turn_count} 轮 · 完成题目 {report.items_completed}/{report.items_total}
             </p>
-            <div style={{ background: "#F7F3FF", borderRadius: 10, padding: 14, marginBottom: 12 }}>
-              <div style={{ fontSize: 13, color: "#7C5CBF", marginBottom: 6 }}>要点覆盖率</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{coverage}%</div>
-              <div style={{ fontSize: 12, color: "#8a7d6b" }}>
-                覆盖 {report.points_covered} / {report.points_total} 个要点
+            {report.points_total > 0 ? (
+              <div style={{ background: "#F7F3FF", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: "#7C5CBF", marginBottom: 6 }}>要点覆盖率</div>
+                <div style={{ fontSize: 22, fontWeight: 700 }}>{coverage}%</div>
+                <div style={{ fontSize: 12, color: "#8a7d6b" }}>
+                  覆盖 {report.points_covered} / {report.points_total} 个要点
+                </div>
               </div>
-            </div>
+            ) : (
+              <div style={{ background: "#F7F3FF", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: "#7C5CBF", marginBottom: 6 }}>考试流程</div>
+                <div style={{ fontSize: 14 }}>
+                  本场按 {report.level} 官方形式完成 {report.turn_count} 轮作答，
+                  内置题卡不统计要点覆盖。
+                </div>
+              </div>
+            )}
             {report.missing_points.length > 0 && (
               <div style={{ background: "#FFF8E1", borderRadius: 10, padding: 14, marginBottom: 12 }}>
                 <div style={{ fontSize: 13, color: "#B9770E", marginBottom: 6 }}>高频遗漏要点</div>
@@ -741,7 +859,8 @@ export default function SpeakingExamView({ onExit }: Props) {
                     <div key={item.item_key} style={{ marginBottom: 10 }}>
                       <div style={{ fontSize: 14 }}>{item.prompt_de}</div>
                       <div style={{ fontSize: 12, color: "#8a7d6b", marginTop: 2 }}>
-                        要点 {item.covered.length}/{total} · {item.turns} 轮
+                        {total > 0 ? `要点 ${item.covered.length}/${total} · ` : ""}
+                        {item.turns} 轮
                         {item.missing.length > 0 && ` · 遗漏：${item.missing.join(" / ")}`}
                       </div>
                     </div>
@@ -751,7 +870,7 @@ export default function SpeakingExamView({ onExit }: Props) {
             )}
             <p style={{ color: "#6b6156", fontSize: 14 }}>{report.suggested_review}</p>
             <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-              <button className="btn primary" onClick={backToSelect}>
+              <button className="btn primary" onClick={initialLevel ? startExam : backToSelect}>
                 再练一次
               </button>
               <button className="btn ghost" onClick={exportReport}>
@@ -771,12 +890,12 @@ export default function SpeakingExamView({ onExit }: Props) {
   return (
     <div className="play-screen">
       <div className="play-topbar">
-        <button className="back-btn" onClick={backToSelect} disabled={busy}>
+        <button className="back-btn" onClick={initialLevel ? onExit : backToSelect} disabled={busy}>
           <ArrowLeftIcon size={18} />
           退出
         </button>
         <span className="level-chip" style={{ background: "#7C5CBF" }}>
-          {level} · {currentPart ? partLabel(currentPart.key) : "口语模拟"}
+          {level} · {currentPart ? currentPart.title : "口语考试"}
         </span>
         <span className="quiz-count">
           剩余 {Math.floor(remainingSec / 60)}:{String(remainingSec % 60).padStart(2, "0")} · 题目{" "}
@@ -801,6 +920,7 @@ export default function SpeakingExamView({ onExit }: Props) {
 
       <div className="play-body">
         <div style={{ width: "100%", maxWidth: 760 }}>
+          {currentPart?.aid && <ExamAidPanel aid={currentPart.aid} />}
           <div
             style={{
               background: "#fff",
