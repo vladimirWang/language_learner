@@ -12,6 +12,7 @@ import {
   type SpeakingLevel,
 } from "../game/speaking";
 import { sfx } from "../game/audio";
+import VoiceAnswerInput from "./VoiceAnswerInput";
 import { ArrowLeftIcon, CheckIcon } from "./icons";
 
 type Props = {
@@ -234,23 +235,14 @@ export default function SpeakingView({ onExit, presetKeys, presetTitle, onAllCom
                 <p style={{ color: "#8a7d6b", marginTop: 0 }}>{current.prompt_zh}</p>
               )}
 
-              <textarea
+              <VoiceAnswerInput
                 value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="用德语输入你的回答…"
+                onChange={setAnswer}
+                onSubmit={submit}
                 disabled={!!feedback}
                 rows={4}
-                style={{
-                  width: "100%",
-                  marginTop: 14,
-                  padding: 12,
-                  borderRadius: 10,
-                  border: "1px solid #e6dccb",
-                  fontFamily: "inherit",
-                  fontSize: 15,
-                  resize: "vertical",
-                  background: feedback ? "#FAF7F0" : "#fff",
-                }}
+                placeholder="用德语输入你的回答…"
+                lang={current.lang}
               />
 
               {!feedback && (

@@ -30,6 +30,7 @@ import {
 import { sfx } from "../game/audio";
 import { EXAM_BLUEPRINTS, isOfficialExam } from "../game/examBlueprint";
 import ExamAidPanel from "./ExamAidPanel";
+import VoiceAnswerInput from "./VoiceAnswerInput";
 import { ArrowLeftIcon, CheckIcon } from "./icons";
 
 type Props = {
@@ -1075,29 +1076,13 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
             </div>
           )}
 
-          <textarea
+          <VoiceAnswerInput
             value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            placeholder="用德语输入你的回答，回车提交，Shift+回车换行…"
+            onChange={setAnswer}
+            onSubmit={submit}
             disabled={busy}
             rows={3}
-            style={{
-              width: "100%",
-              marginTop: 10,
-              padding: 12,
-              borderRadius: 10,
-              border: "1px solid #e6dccb",
-              fontFamily: "inherit",
-              fontSize: 15,
-              resize: "vertical",
-              background: busy ? "#FAF7F0" : "#fff",
-            }}
+            lang={currentItem?.lang ?? "de"}
           />
 
           <div style={{ display: "flex", gap: 10, marginTop: 10 }}>

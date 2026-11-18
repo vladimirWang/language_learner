@@ -404,6 +404,37 @@ export async function fetchSpeakingReply(
 }
 
 // ---------------------------------------------------------------------------
+// 语音输入：录音上传后端转写
+// ---------------------------------------------------------------------------
+
+/** 上传一段录音并转写为文本；lang 指定音频语种，避免被识别成其他语言。 */
+export async function transcribeSpeakingAudio(audio: Blob, lang = "de"): Promise<string> {
+  const form = new FormData()
+  form.append("audio", audio, "answer.wav")
+  form.append("lang", lang)
+  const res = await fetch(`${API_BASE}/api/speaking/transcribe`, {
+    method: "POST",
+    body: form,
+    headers: { Accept: "application/json" },
+  })
+  if (!res.ok) {
+    let detail = ""
+    try {
+      const body = (await res.json()) as { error?: string }
+      detail = body.error ?? ""
+    } catch {
+      /* 非 JSON 响应 */
+    }
+    if (res.status === 503) {
+      throw new Error("语音识别未启用，请先在服务端配置 ASR")
+    }
+    throw new Error(detail || `语音识别失败（HTTP ${res.status}）`)
+  }
+  const body = (await res.json()) as { text?: string }
+  return (body.text ?? "").trim()
+}
+
+// ---------------------------------------------------------------------------
 // 会话报告（仅存本地，不上传）
 // ---------------------------------------------------------------------------
 
