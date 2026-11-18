@@ -220,7 +220,7 @@ export async function fetchSpeakingReply(
         exam_part: params.examPart,
         topic: params.topic,
         role: params.role,
-        history: params.history.slice(-8),
+        history: params.history.slice(-40),
         followup_count: params.followupCount,
         prompt_de: params.promptDE,
       }),

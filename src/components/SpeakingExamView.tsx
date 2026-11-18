@@ -91,7 +91,8 @@ export default function SpeakingExamView({ onExit }: Props) {
   const partStartedAt = useRef(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [remainingSec, setRemainingSec] = useState(0);
-  const [autoRead, setAutoRead] = useState(false);
+  const [autoRead, setAutoRead] = useState(true);
+  const [showSubtitle, setShowSubtitle] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -571,6 +572,13 @@ export default function SpeakingExamView({ onExit }: Props) {
         >
           🔊 {autoRead ? "自动朗读中" : "自动朗读"}
         </button>
+        <button
+          className="btn ghost"
+          style={{ marginLeft: 8, fontSize: 12, padding: "4px 10px" }}
+          onClick={() => setShowSubtitle((v) => !v)}
+        >
+          {showSubtitle ? "隐藏字幕" : "显示字幕"}
+        </button>
       </div>
 
       <div className="play-body">
@@ -631,7 +639,13 @@ export default function SpeakingExamView({ onExit }: Props) {
                       </button>
                     )}
                   </div>
-                  <div style={{ fontSize: 15, lineHeight: 1.6 }}>{msg.text}</div>
+                  {msg.role === "user" || showSubtitle ? (
+                    <div style={{ fontSize: 15, lineHeight: 1.6 }}>{msg.text}</div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: "#a99a86" }}>
+                      🔊 语音消息，点击上方「显示字幕」查看内容
+                    </div>
+                  )}
                   {msg.feedback && (
                     <div style={{ fontSize: 12, color: "#8a7d6b", marginTop: 6 }}>
                       要点覆盖：{msg.feedback.covered.length} /{" "}
@@ -663,7 +677,13 @@ export default function SpeakingExamView({ onExit }: Props) {
           <textarea
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            placeholder="用德语输入你的回答…"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            placeholder="用德语输入你的回答，回车提交，Shift+回车换行…"
             disabled={busy}
             rows={3}
             style={{
