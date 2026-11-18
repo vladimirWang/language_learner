@@ -3,6 +3,7 @@ import {
   PART_TIME_LIMIT_SEC,
   SPEAKING_LEVELS,
   evaluateAnswer,
+  fetchGrammarCheck,
   fetchSpeakingItems,
   fetchSpeakingReply,
   loadSpeakingProgress,
@@ -14,6 +15,7 @@ import {
   speakGerman,
   partLabel,
   topMissingPoints,
+  type GrammarCheck,
   type SpeakingFeedback,
   type SpeakingItem,
   type SpeakingLevel,
@@ -41,6 +43,10 @@ interface ChatMessage {
   feedback?: SpeakingFeedback;
   /** 非用户消息的来源：LLM 生成或模板兜底 */
   source?: "llm" | "template";
+  /** 用户回答的语法批改结果；null 表示语法检查不可用 */
+  grammar?: GrammarCheck | null;
+  /** 语法检查进行中 */
+  checking?: boolean;
 }
 
 const PART_ORDER = ["part1_intro", "part2_presentation", "part3_discussion"];
@@ -163,7 +169,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     text: string,
     feedback?: SpeakingFeedback,
     source?: ChatMessage["source"],
-  ) => {
+  ): number => {
     msgID.current += 1;
     const msg: ChatMessage = { id: msgID.current, role, text, feedback, source };
     // 同步维护 ref，供计时器等闭包场景读取最新对话，避免重复提问。
@@ -173,6 +179,14 @@ export default function SpeakingExamView({ onExit }: Props) {
     if (role !== "user") {
       questionShownAt.current = Date.now();
     }
+    return msg.id;
+  };
+
+  /** 局部更新某条消息（语法批改是异步返回的）。 */
+  const patchMessage = (id: number, patch: Partial<ChatMessage>) => {
+    const next = messagesRef.current.map((msg) => (msg.id === id ? { ...msg, ...patch } : msg));
+    messagesRef.current = next;
+    setMessages(next);
   };
 
   useEffect(() => {
@@ -367,6 +381,20 @@ export default function SpeakingExamView({ onExit }: Props) {
     }
   };
 
+  /** 依据后端语法库批改本条回答；不可用时静默跳过。 */
+  const checkGrammar = async (msgIDValue: number, text: string) => {
+    if (!currentItem) return;
+    patchMessage(msgIDValue, { checking: true });
+    const result = await fetchGrammarCheck({
+      level,
+      topic: currentItem.topic,
+      promptDE: currentItem.prompt_de,
+      answer: text,
+      expectedPoints: currentItem.expected_points,
+    });
+    patchMessage(msgIDValue, { checking: false, grammar: result });
+  };
+
   const submit = () => {
     if (!currentItem || !currentPart || busy || !answer.trim()) return;
     const text = answer.trim();
@@ -410,8 +438,10 @@ export default function SpeakingExamView({ onExit }: Props) {
     per.missing = per.missing.filter((point) => !per.covered.includes(point));
     stats.perItem[currentItem.item_key] = per;
 
-    pushMessage("user", text, feedback);
+    const answerMsgID = pushMessage("user", text, feedback);
     setAnswer("");
+    // 语法检查与追问并行，结果异步回填，不阻塞对话推进。
+    void checkGrammar(answerMsgID, text);
     if (feedback.missing.length === 0 && !feedback.tooShort) {
       sfx.correct();
     } else {
@@ -821,6 +851,53 @@ export default function SpeakingExamView({ onExit }: Props) {
                         ` · 还可补充：${msg.feedback.missing.join(" / ")}`}
                       {msg.feedback.offTopic && (
                         <span style={{ color: "#D9534F", marginLeft: 6 }}>· 可能跑题</span>
+                      )}
+                    </div>
+                  )}
+                  {msg.checking && (
+                    <div style={{ fontSize: 12, color: "#a99a86", marginTop: 6 }}>语法检查中…</div>
+                  )}
+                  {msg.grammar && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        paddingTop: 6,
+                        borderTop: "1px dashed #cfd9e8",
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {msg.grammar.errors.length === 0 ? (
+                        <div style={{ color: "#2E7D32" }}>
+                          ✓ 语法检查通过
+                          {msg.grammar.comment ? `：${msg.grammar.comment}` : ""}
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ color: "#C0392B", marginBottom: 4 }}>
+                            语法问题 {msg.grammar.errors.length} 处
+                            {msg.grammar.comment ? ` · ${msg.grammar.comment}` : ""}
+                          </div>
+                          {msg.grammar.errors.map((err, idx) => (
+                            <div key={idx} style={{ color: "#6b6156", marginBottom: 3 }}>
+                              <span style={{ color: "#C0392B" }}>{err.snippet}</span>
+                              <span> → {err.fix}</span>
+                              <span style={{ color: "#8a7d6b" }}>
+                                （{err.type}：{err.explanation}）
+                              </span>
+                            </div>
+                          ))}
+                          {msg.grammar.corrected && (
+                            <div style={{ color: "#2F86D6", marginTop: 4 }}>
+                              参考改写：{msg.grammar.corrected}
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {msg.grammar.rules.length > 0 && (
+                        <div style={{ color: "#a99a86", marginTop: 4 }}>
+                          参考规范：{msg.grammar.rules.join(" / ")}
+                        </div>
                       )}
                     </div>
                   )}

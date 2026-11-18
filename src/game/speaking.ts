@@ -206,6 +206,65 @@ export interface SpeakingReplyResult {
   source: "llm" | "template"
 }
 
+export interface GrammarIssue {
+  /** 错误类型：冠词 / 格 / 介词 / 语序 / 动词变位 / 搭配 */
+  type: string
+  /** 原句中的错误片段 */
+  snippet: string
+  /** 正确写法 */
+  fix: string
+  /** 中文解释 */
+  explanation: string
+}
+
+export interface GrammarCheck {
+  corrected: string
+  errors: GrammarIssue[]
+  rules: string[]
+  comment: string
+  source: "llm" | "template"
+}
+
+export interface GrammarCheckParams {
+  level: string
+  topic: string
+  promptDE: string
+  answer: string
+  expectedPoints?: string
+}
+
+/** 依据服务端语法库批改回答；不可用或未启用 LLM 时返回 null，前端静默降级。 */
+export async function fetchGrammarCheck(
+  params: GrammarCheckParams,
+): Promise<GrammarCheck | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/speaking/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        lang: "de",
+        level: params.level,
+        topic: params.topic,
+        prompt_de: params.promptDE,
+        answer: params.answer,
+        expected_points: params.expectedPoints ?? "",
+      }),
+    })
+    if (!res.ok) return null
+    const body = (await res.json()) as Partial<GrammarCheck>
+    if (body.source !== "llm") return null
+    return {
+      corrected: body.corrected ?? "",
+      errors: Array.isArray(body.errors) ? body.errors : [],
+      rules: Array.isArray(body.rules) ? body.rules : [],
+      comment: body.comment ?? "",
+      source: "llm",
+    }
+  } catch {
+    return null
+  }
+}
+
 /** 请求下一句考官追问或搭档回应；失败时返回空串由调用方兜底。 */
 export async function fetchSpeakingReply(
   params: SpeakingReplyParams,
