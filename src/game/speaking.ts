@@ -69,8 +69,8 @@ export function evaluateAnswer(item: SpeakingItem, answer: string): SpeakingFeed
   const text = answer.trim()
   const lower = text.toLowerCase()
   const points = parsePoints(item.expected_points)
-  const covered = points.filter((p) => lower.includes(p.toLowerCase()))
-  const missing = points.filter((p) => !lower.includes(p.toLowerCase()))
+  const covered = points.filter((p) => pointMatches(p, lower))
+  const missing = points.filter((p) => !pointMatches(p, lower))
 
   const answerWords = contentWords(text)
   const topicWords = contentWords(
@@ -125,6 +125,14 @@ export function parsePoints(raw: string): string[] {
   } catch {
     return []
   }
+}
+
+/** 单个要点内可用 `|` 表示同义表达，命中任意一个即算覆盖。 */
+function pointMatches(point: string, lowerAnswer: string): boolean {
+  return point
+    .split("|")
+    .map((alt) => alt.trim().toLowerCase())
+    .some((alt) => alt !== "" && lowerAnswer.includes(alt))
 }
 
 export function fetchSpeakingItems(params?: {
@@ -199,6 +207,10 @@ export interface SpeakingReplyParams {
   history: SpeakingTurn[]
   followupCount: number
   promptDE: string
+  /** 本题要点与当前覆盖情况，用于把追问约束在本题内 */
+  expectedPoints?: string
+  coveredPoints?: string[]
+  missingPoints?: string[]
 }
 
 export interface SpeakingReplyResult {
@@ -230,7 +242,6 @@ export interface GrammarCheckParams {
   topic: string
   promptDE: string
   answer: string
-  expectedPoints?: string
 }
 
 /** 依据服务端语法库批改回答；不可用或未启用 LLM 时返回 null，前端静默降级。 */
@@ -247,7 +258,6 @@ export async function fetchGrammarCheck(
         topic: params.topic,
         prompt_de: params.promptDE,
         answer: params.answer,
-        expected_points: params.expectedPoints ?? "",
       }),
     })
     if (!res.ok) return null
@@ -282,6 +292,9 @@ export async function fetchSpeakingReply(
         history: params.history,
         followup_count: params.followupCount,
         prompt_de: params.promptDE,
+        expected_points: params.expectedPoints ?? "",
+        covered_points: params.coveredPoints ?? [],
+        missing_points: params.missingPoints ?? [],
       }),
     })
     if (!res.ok) return { reply: "", source: "template" }

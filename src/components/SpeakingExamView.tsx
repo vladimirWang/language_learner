@@ -362,7 +362,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     if (last && last.role !== "user") speakGerman(last.text);
   }, [messages, autoRead, phase]);
 
-  const requestReply = async (role: "examiner" | "partner") => {
+  const requestReply = async (role: "examiner" | "partner", feedback: SpeakingFeedback) => {
     if (!currentItem || !currentPart) return;
     setBusy(true);
     // 保留整场考试的对话上下文：后端靠 history 判断「已问过什么」，
@@ -379,6 +379,9 @@ export default function SpeakingExamView({ onExit }: Props) {
       history,
       followupCount: replySeq.current,
       promptDE: currentItem.prompt_de,
+      expectedPoints: currentItem.expected_points,
+      coveredPoints: feedback.covered,
+      missingPoints: feedback.missing,
     });
     replySeq.current += 1;
     setBusy(false);
@@ -394,12 +397,15 @@ export default function SpeakingExamView({ onExit }: Props) {
   const checkGrammar = async (msgIDValue: number, text: string) => {
     if (!currentItem) return;
     patchMessage(msgIDValue, { checking: true });
+    // 批改要对齐考生实际回答的那句提问，而不是题库原始问句。
+    const lastQuestion =
+      [...messagesRef.current].reverse().find((msg) => msg.role !== "user")?.text ??
+      currentItem.prompt_de;
     const result = await fetchGrammarCheck({
       level,
       topic: currentItem.topic,
-      promptDE: currentItem.prompt_de,
+      promptDE: lastQuestion,
       answer: text,
-      expectedPoints: currentItem.expected_points,
     });
     patchMessage(msgIDValue, { checking: false, grammar: result });
   };
@@ -407,13 +413,17 @@ export default function SpeakingExamView({ onExit }: Props) {
   const submit = () => {
     if (!currentItem || !currentPart || busy || !answer.trim()) return;
     const text = answer.trim();
+    // 要点只属于题库原问题：追问的回答不再按原要点判定，避免「答对了却判 0 分」。
+    const isFollowup = exchanges > 0;
     const feedback = evaluateAnswer(currentItem, text);
     const stats = statsRef.current;
     stats.turns += 1;
-    stats.pointsTotal += feedback.covered.length + feedback.missing.length;
-    stats.pointsCovered += feedback.covered.length;
-    for (const point of feedback.missing) {
-      stats.missing[point] = (stats.missing[point] ?? 0) + 1;
+    if (!isFollowup) {
+      stats.pointsTotal += feedback.covered.length + feedback.missing.length;
+      stats.pointsCovered += feedback.covered.length;
+      for (const point of feedback.missing) {
+        stats.missing[point] = (stats.missing[point] ?? 0) + 1;
+      }
     }
     // 流利度近似指标（文本模式）：响应耗时与重复词比例
     const latency = questionShownAt.current > 0 ? Date.now() - questionShownAt.current : 0;
@@ -438,16 +448,18 @@ export default function SpeakingExamView({ onExit }: Props) {
     };
     per.turns += 1;
     per.latencySum += latency;
-    for (const point of feedback.covered) {
-      if (!per.covered.includes(point)) per.covered.push(point);
+    if (!isFollowup) {
+      for (const point of feedback.covered) {
+        if (!per.covered.includes(point)) per.covered.push(point);
+      }
+      for (const point of feedback.missing) {
+        if (!per.missing.includes(point)) per.missing.push(point);
+      }
+      per.missing = per.missing.filter((point) => !per.covered.includes(point));
     }
-    for (const point of feedback.missing) {
-      if (!per.missing.includes(point)) per.missing.push(point);
-    }
-    per.missing = per.missing.filter((point) => !per.covered.includes(point));
     stats.perItem[currentItem.item_key] = per;
 
-    const answerMsgID = pushMessage("user", text, feedback);
+    const answerMsgID = pushMessage("user", text, isFollowup ? undefined : feedback);
     setAnswer("");
     // 语法检查与追问并行，结果异步回填，不阻塞对话推进。
     void checkGrammar(answerMsgID, text);
@@ -456,7 +468,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     } else {
       sfx.tap();
     }
-    if (feedback.missing.length > 0) {
+    if (!isFollowup && feedback.missing.length > 0) {
       saveSpeakingError({
         item_key: currentItem.item_key,
         level,
@@ -490,7 +502,7 @@ export default function SpeakingExamView({ onExit }: Props) {
       );
       return;
     }
-    void requestReply(isDiscussion ? "partner" : "examiner");
+    void requestReply(isDiscussion ? "partner" : "examiner", feedback);
   };
 
   const skipItem = () => {
