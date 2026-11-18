@@ -6,6 +6,7 @@ import {
   fetchSpeakingItems,
   fetchSpeakingReply,
   loadSpeakingProgress,
+  loadSpeakingSessions,
   reportToMarkdown,
   saveSpeakingError,
   saveSpeakingProgress,
@@ -84,15 +85,21 @@ export default function SpeakingExamView({ onExit }: Props) {
     latencies: [] as number[],
     words: 0,
     duplicateWords: 0,
+    perItem: {} as Record<
+      string,
+      { prompt_de: string; covered: string[]; missing: string[]; turns: number; latencySum: number }
+    >,
   });
   const msgID = useRef(0);
   const replySeq = useRef(0);
   const questionShownAt = useRef(0);
   const partStartedAt = useRef(0);
+  const timedOutRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [remainingSec, setRemainingSec] = useState(0);
   const [autoRead, setAutoRead] = useState(true);
   const [showSubtitle, setShowSubtitle] = useState(false);
+  const [recent, setRecent] = useState<SpeakingSessionReport[]>([]);
 
   const load = () => {
     setLoading(true);
@@ -142,11 +149,17 @@ export default function SpeakingExamView({ onExit }: Props) {
     }
   };
 
+  useEffect(() => {
+    if (phase !== "select") return;
+    setRecent(loadSpeakingSessions().slice(0, 3));
+  }, [phase]);
+
   const startExam = () => {
     if (parts.length === 0) return;
     startedAtRef.current = Date.now();
     replySeq.current = 0;
     partStartedAt.current = Date.now();
+    timedOutRef.current = false;
     setRemainingSec(PART_TIME_LIMIT_SEC[parts[0].key] ?? 240);
     statsRef.current = {
       turns: 0,
@@ -158,6 +171,7 @@ export default function SpeakingExamView({ onExit }: Props) {
       latencies: [],
       words: 0,
       duplicateWords: 0,
+      perItem: {},
     };
     setMessages([]);
     setAnswer("");
@@ -183,6 +197,16 @@ export default function SpeakingExamView({ onExit }: Props) {
         : 0;
     const maxLatency = stats.latencies.length > 0 ? Math.max(...stats.latencies) : 0;
     const repetitionRatio = stats.words > 0 ? stats.duplicateWords / stats.words : 0;
+    const items = Object.entries(stats.perItem).map(([key, value]) => ({
+      item_key: key,
+      prompt_de: value.prompt_de,
+      covered: value.covered,
+      missing: value.missing,
+      turns: value.turns,
+      avg_response_ms: value.turns > 0 ? Math.round(value.latencySum / value.turns) : 0,
+    }));
+    const speakingMs = stats.latencies.reduce((sum, v) => sum + v, 0);
+    const wordsPerMin = speakingMs > 0 ? Math.round(stats.words / (speakingMs / 60000)) : 0;
     const result: SpeakingSessionReport = {
       id: `sp-${Date.now()}`,
       level,
@@ -203,6 +227,8 @@ export default function SpeakingExamView({ onExit }: Props) {
       avg_response_ms: avgLatency,
       max_response_ms: maxLatency,
       repetition_ratio: repetitionRatio,
+      words_per_min: wordsPerMin,
+      items,
     };
     saveSpeakingSession(result);
     const boosted = Array.from(
@@ -212,6 +238,19 @@ export default function SpeakingExamView({ onExit }: Props) {
     setReport(result);
     setPhase("report");
     sfx.win();
+  };
+
+  /** 跳到指定部分开头，并重置该部分的计时。 */
+  const jumpToPart = (index: number) => {
+    const nextPart = parts[index];
+    if (!nextPart || nextPart.items.length === 0) return;
+    setPartIndex(index);
+    setItemIndex(0);
+    setExchanges(0);
+    partStartedAt.current = Date.now();
+    timedOutRef.current = false;
+    setRemainingSec(PART_TIME_LIMIT_SEC[nextPart.key] ?? 240);
+    pushMessage(initialRole(nextPart.items[0]), nextPart.items[0].prompt_de);
   };
 
   const advance = () => {
@@ -224,19 +263,13 @@ export default function SpeakingExamView({ onExit }: Props) {
       return;
     }
     if (partIndex + 1 < parts.length) {
-      const nextPart = parts[partIndex + 1];
-      setPartIndex(partIndex + 1);
-      setItemIndex(0);
-      setExchanges(0);
-      partStartedAt.current = Date.now();
-      setRemainingSec(PART_TIME_LIMIT_SEC[nextPart.key] ?? 240);
-      pushMessage(initialRole(nextPart.items[0]), nextPart.items[0].prompt_de);
+      jumpToPart(partIndex + 1);
       return;
     }
     finishExam();
   };
 
-  // 部分计时：到时自动推进到下一部分，最后一部分结束则出报告。
+  // 部分计时：到时直接进入下一部分，避免在同一部分内连续自动出题。
   useEffect(() => {
     if (phase !== "exam" || !currentPart) return;
     const limit = PART_TIME_LIMIT_SEC[currentPart.key] ?? 240;
@@ -244,7 +277,14 @@ export default function SpeakingExamView({ onExit }: Props) {
       const elapsed = Math.floor((Date.now() - partStartedAt.current) / 1000);
       const left = Math.max(0, limit - elapsed);
       setRemainingSec(left);
-      if (left <= 0) advance();
+      if (left > 0 || timedOutRef.current) return;
+      // 每个部分只触发一次自动推进
+      timedOutRef.current = true;
+      if (partIndex + 1 < parts.length) {
+        jumpToPart(partIndex + 1);
+      } else {
+        finishExam();
+      }
     }, 1000);
     return () => window.clearInterval(timer);
   }, [phase, partIndex, itemIndex, currentPart]);
@@ -294,8 +334,9 @@ export default function SpeakingExamView({ onExit }: Props) {
       stats.missing[point] = (stats.missing[point] ?? 0) + 1;
     }
     // 流利度近似指标（文本模式）：响应耗时与重复词比例
-    if (questionShownAt.current > 0) {
-      stats.latencies.push(Date.now() - questionShownAt.current);
+    const latency = questionShownAt.current > 0 ? Date.now() - questionShownAt.current : 0;
+    if (latency > 0) {
+      stats.latencies.push(latency);
     }
     const words = text
       .toLowerCase()
@@ -304,6 +345,25 @@ export default function SpeakingExamView({ onExit }: Props) {
       .filter((w) => w.length > 2);
     stats.words += words.length;
     stats.duplicateWords += words.length - new Set(words).size;
+
+    // 逐题汇总：覆盖过的要点不再算遗漏
+    const per = stats.perItem[currentItem.item_key] ?? {
+      prompt_de: currentItem.prompt_de,
+      covered: [],
+      missing: [],
+      turns: 0,
+      latencySum: 0,
+    };
+    per.turns += 1;
+    per.latencySum += latency;
+    for (const point of feedback.covered) {
+      if (!per.covered.includes(point)) per.covered.push(point);
+    }
+    for (const point of feedback.missing) {
+      if (!per.missing.includes(point)) per.missing.push(point);
+    }
+    per.missing = per.missing.filter((point) => !per.covered.includes(point));
+    stats.perItem[currentItem.item_key] = per;
 
     pushMessage("user", text, feedback);
     setAnswer("");
@@ -458,6 +518,48 @@ export default function SpeakingExamView({ onExit }: Props) {
                 </div>
               </div>
             )}
+
+            {recent.length > 0 && (
+              <div style={{ marginTop: 26 }}>
+                <h3 style={{ fontSize: 15, marginBottom: 8 }}>最近练习</h3>
+                {recent.map((session) => {
+                  const pct =
+                    session.points_total > 0
+                      ? Math.round((session.points_covered / session.points_total) * 100)
+                      : 0;
+                  return (
+                    <div
+                      key={session.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        background: "#fff",
+                        borderRadius: 8,
+                        padding: "8px 12px",
+                        marginBottom: 8,
+                        fontSize: 13,
+                      }}
+                    >
+                      <span>
+                        {new Date(session.ended_at).toLocaleString("zh-CN")} · {session.level} · 覆盖{" "}
+                        {pct}% · {session.turn_count} 轮
+                      </span>
+                      <button
+                        className="btn ghost"
+                        style={{ fontSize: 12, padding: "3px 10px" }}
+                        onClick={() => {
+                          setReport(session);
+                          setPhase("report");
+                        }}
+                      >
+                        查看
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -529,8 +631,27 @@ export default function SpeakingExamView({ onExit }: Props) {
                 <span>平均响应 {(report.avg_response_ms / 1000).toFixed(1)} 秒</span>
                 <span>最长响应 {(report.max_response_ms / 1000).toFixed(1)} 秒</span>
                 <span>重复词占比 {Math.round(report.repetition_ratio * 100)}%</span>
+                <span>估算语速 {report.words_per_min ?? 0} 词/分</span>
               </div>
             </div>
+
+            {(report.items ?? []).length > 0 && (
+              <div style={{ background: "#fff", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: "#6b6156", marginBottom: 8 }}>逐题反馈</div>
+                {(report.items ?? []).map((item) => {
+                  const total = item.covered.length + item.missing.length;
+                  return (
+                    <div key={item.item_key} style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 14 }}>{item.prompt_de}</div>
+                      <div style={{ fontSize: 12, color: "#8a7d6b", marginTop: 2 }}>
+                        要点 {item.covered.length}/{total} · {item.turns} 轮
+                        {item.missing.length > 0 && ` · 遗漏：${item.missing.join(" / ")}`}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <p style={{ color: "#6b6156", fontSize: 14 }}>{report.suggested_review}</p>
             <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
               <button className="btn primary" onClick={backToSelect}>

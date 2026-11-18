@@ -242,6 +242,15 @@ export async function fetchSpeakingReply(
 
 const SESSION_KEY = "speaking.sessions.v1"
 
+export interface SpeakingItemResult {
+  item_key: string
+  prompt_de: string
+  covered: string[]
+  missing: string[]
+  turns: number
+  avg_response_ms: number
+}
+
 export interface SpeakingSessionReport {
   id: string
   level: string
@@ -256,10 +265,13 @@ export interface SpeakingSessionReport {
   points_covered: number
   missing_points: string[]
   suggested_review: string
-  /** 流利度：平均/最长响应耗时（毫秒）与重复词占比 */
+  /** 流利度：平均/最长响应耗时（毫秒）、重复词占比与估算语速（词/分钟） */
   avg_response_ms: number
   max_response_ms: number
   repetition_ratio: number
+  words_per_min: number
+  /** 逐题反馈 */
+  items: SpeakingItemResult[]
 }
 
 export function loadSpeakingSessions(): SpeakingSessionReport[] {
@@ -353,8 +365,25 @@ export function reportToMarkdown(report: SpeakingSessionReport): string {
     `- 平均响应耗时：${(report.avg_response_ms / 1000).toFixed(1)} 秒`,
     `- 最长响应耗时：${(report.max_response_ms / 1000).toFixed(1)} 秒`,
     `- 重复词占比：${Math.round(report.repetition_ratio * 100)}%`,
+    `- 估算语速：${report.words_per_min ?? 0} 词/分钟`,
     "",
   ];
+  const itemResults = report.items ?? [];
+  if (itemResults.length > 0) {
+    lines.push("## 逐题反馈", "");
+    for (const item of itemResults) {
+      const covered = item.covered.length;
+      const total = covered + item.missing.length;
+      lines.push(`### ${item.prompt_de}`);
+      lines.push("");
+      lines.push(`- 要点覆盖：${covered}/${total}`);
+      if (item.missing.length > 0) {
+        lines.push(`- 遗漏：${item.missing.join(" / ")}`);
+      }
+      lines.push(`- 回答轮次：${item.turns}`);
+      lines.push("");
+    }
+  }
   if (report.missing_points.length > 0) {
     lines.push("## 高频遗漏要点", "", ...report.missing_points.map((p) => `- ${p}`), "");
   }
