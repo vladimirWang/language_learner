@@ -27,6 +27,42 @@ interface SpeakingItemsResponse {
   items: SpeakingItem[]
 }
 
+/** 考试辅助材料：关键词、题卡、思维导图、双人日程。 */
+export type ExamAid =
+  | { kind: "chips"; label: string; items: string[] }
+  | { kind: "cards"; label: string; cards: { title: string; hint: string }[] }
+  | { kind: "mindmap"; label: string; center: string; branches: string[] }
+  | { kind: "schedule"; label: string; groups: { name: string; slots: string[] }[] }
+  | { kind: "topic"; label: string; text: string };
+
+/** 部分交互形态：自我介绍 / 问答 / 请求 / 自述 / 规划 / 陈述 / 讨论 */
+export type ExamPartMode =
+  | "intro"
+  | "qa"
+  | "request"
+  | "monologue"
+  | "planning"
+  | "presentation"
+  | "discussion";
+
+/** 口语考试的固定部分配置，来自 speaking_exam_parts 表。 */
+export interface SpeakingExamPart {
+  lang: string;
+  level: SpeakingLevel;
+  part_key: string;
+  title: string;
+  mode: ExamPartMode;
+  duration_sec: number;
+  max_followups: number;
+  role: "examiner" | "partner";
+  aid: ExamAid | null;
+  sort_order: number;
+}
+
+interface SpeakingExamPartsResponse {
+  parts: SpeakingExamPart[];
+}
+
 export interface SpeakingFeedback {
   /** 已覆盖的要点 */
   covered: string[]
@@ -158,6 +194,32 @@ export function fetchSpeakingItems(params?: {
     const body = (await res.json()) as SpeakingItemsResponse
     return body.items ?? []
   })
+}
+
+/** 拉取口语考试各部分配置（A1/A2 的考试结构来源）。 */
+export function fetchSpeakingExamParts(params?: {
+  lang?: string;
+  level?: string;
+}): Promise<SpeakingExamPart[]> {
+  const query = new URLSearchParams();
+  query.set("lang", params?.lang ?? "de");
+  if (params?.level) query.set("level", params.level);
+  return fetch(`${API_BASE}/api/speaking/exam-parts?${query.toString()}`, {
+    headers: { Accept: "application/json" },
+  }).then(async (res) => {
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.error) msg = body.error;
+      } catch {
+        // ignore
+      }
+      throw new Error(msg);
+    }
+    const body = (await res.json()) as SpeakingExamPartsResponse;
+    return body.parts ?? [];
+  });
 }
 
 // ---------------------------------------------------------------------------

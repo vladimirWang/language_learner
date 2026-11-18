@@ -4,6 +4,7 @@ import {
   SPEAKING_LEVELS,
   evaluateAnswer,
   fetchGrammarCheck,
+  fetchSpeakingExamParts,
   fetchSpeakingItems,
   fetchSpeakingReply,
   loadSpeakingProgress,
@@ -15,7 +16,10 @@ import {
   speakGerman,
   partLabel,
   topMissingPoints,
+  type ExamAid,
+  type ExamPartMode,
   type GrammarCheck,
+  type SpeakingExamPart,
   type SpeakingFeedback,
   type SpeakingItem,
   type SpeakingLevel,
@@ -23,12 +27,7 @@ import {
   type SpeakingTurn,
 } from "../game/speaking";
 import { sfx } from "../game/audio";
-import {
-  EXAM_BLUEPRINTS,
-  usesBuiltinExam,
-  type ExamAid,
-  type ExamPartBlueprint,
-} from "../game/examBlueprint";
+import { EXAM_BLUEPRINTS, isOfficialExam } from "../game/examBlueprint";
 import ExamAidPanel from "./ExamAidPanel";
 import { ArrowLeftIcon, CheckIcon } from "./icons";
 
@@ -47,7 +46,7 @@ type Phase = "select" | "exam" | "report";
 interface PartGroup {
   key: string;
   title: string;
-  mode: ExamPartBlueprint["mode"];
+  mode: ExamPartMode;
   durationSec: number;
   maxFollowups: number;
   role: "examiner" | "partner";
@@ -100,35 +99,11 @@ function wasAsked(prompt: string, history: ChatMessage[]): boolean {
   });
 }
 
-/** 把内置蓝图的一道题转换成与题库一致的结构，复用原有批改与报告逻辑。 */
-function blueprintItem(
-  level: SpeakingLevel,
-  part: ExamPartBlueprint,
-  prompt: { de: string; zh: string; topic: string },
-  index: number,
-  fallbackTopic: string,
-): SpeakingItem {
-  return {
-    item_key: `bp-${level}-${part.key}-${index}`,
-    lang: "de",
-    level,
-    exam_part: part.key,
-    topic: prompt.topic || fallbackTopic || level,
-    role: part.role,
-    prompt_de: prompt.de,
-    prompt_zh: prompt.zh,
-    expected_points: "[]",
-    ref_answer: "",
-    error_note: "",
-    sort_order: index,
-    active: true,
-  };
-}
-
 export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish }: Props) {
   const [phase, setPhase] = useState<Phase>("select");
   const [level, setLevel] = useState<SpeakingLevel>(initialLevel ?? "A1");
   const [items, setItems] = useState<SpeakingItem[]>([]);
+  const [examParts, setExamParts] = useState<SpeakingExamPart[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -174,11 +149,18 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish
   const load = () => {
     setLoading(true);
     setError(null);
-    fetchSpeakingItems({ lang: "de" })
-      .then((list) => {
+    Promise.all([
+      fetchSpeakingItems({ lang: "de" }),
+      fetchSpeakingExamParts({ lang: "de" }),
+    ])
+      .then(([list, parts]) => {
         setItems(list);
+        setExamParts(parts);
         if (initialLevel) return;
-        const first = SPEAKING_LEVELS.find((lv) => list.some((it) => it.level === lv));
+        // 优先选中已配置考试结构或已有题目的等级。
+        const first = SPEAKING_LEVELS.find(
+          (lv) => parts.some((p) => p.level === lv) || list.some((it) => it.level === lv),
+        );
         if (first) setLevel(first);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
@@ -194,27 +176,28 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish
   }, [messages, busy]);
 
   const blueprint = EXAM_BLUEPRINTS[level];
-  const builtinExam = usesBuiltinExam(level);
 
   const parts = useMemo<PartGroup[]>(() => {
-    // A1/A2：完全按官方考试形式的内置蓝图，不依赖题库。
-    if (builtinExam) {
-      return (blueprint ?? [])
-        .filter((part) => (part.prompts ?? []).length > 0)
+    // A1/A2：考试结构与题目全部来自数据库（speaking_exam_parts + speaking_items）。
+    if (isOfficialExam(level)) {
+      return examParts
+        .filter((part) => part.level === level)
+        .sort((a, b) => a.sort_order - b.sort_order)
         .map(
           (part): PartGroup => ({
-            key: part.key,
+            key: part.part_key,
             title: part.title,
             mode: part.mode,
-            durationSec: part.durationSec,
-            maxFollowups: part.maxFollowups,
+            durationSec: part.duration_sec,
+            maxFollowups: part.max_followups,
             role: part.role,
-            aid: part.aid,
-            items: (part.prompts ?? []).map((prompt, index) =>
-              blueprintItem(level, part, prompt, index, topic ?? ""),
+            aid: part.aid ?? undefined,
+            items: items.filter(
+              (it) => it.level === level && it.exam_part === part.part_key,
             ),
           }),
-        );
+        )
+        .filter((part) => part.items.length > 0);
     }
     // B1/B2：题目来自题库，蓝图只提供部分标题、时长与追问上限。
     return PART_ORDER.map((key): PartGroup => {
@@ -236,7 +219,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish
         items: items.filter((it) => it.level === level && it.exam_part === key),
       };
     }).filter((part) => part.items.length > 0);
-  }, [items, level, topic, blueprint, builtinExam]);
+  }, [items, examParts, level, topic, blueprint]);
 
   const currentPart = parts[partIndex] ?? null;
   const currentItem = currentPart?.items[itemIndex] ?? null;
@@ -361,7 +344,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish
     sfx.win();
   };
 
-  // 从关卡进入时锁定等级，等蓝图/题库就绪后直接开考。
+  // 从关卡进入时锁定等级，等考试配置/题库就绪后直接开考。
   const autoStarted = useRef(false);
   useEffect(() => {
     if (!initialLevel || autoStarted.current || phase !== "select") return;
@@ -678,20 +661,23 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
               {SPEAKING_LEVELS.map((lv) => {
                 const count = items.filter((it) => it.level === lv).length;
-                const builtin = usesBuiltinExam(lv);
+                const official = isOfficialExam(lv);
+                const ready = official
+                  ? examParts.some((part) => part.level === lv) && count > 0
+                  : count > 0;
                 return (
                   <button
                     key={lv}
                     className="btn ghost"
-                    disabled={count === 0 && !builtin}
+                    disabled={!ready}
                     onClick={() => setLevel(lv)}
                     style={{
                       background: lv === level ? LEVEL_COLORS[lv] : undefined,
                       color: lv === level ? "#fff" : undefined,
-                      opacity: count === 0 && !builtin ? 0.4 : 1,
+                      opacity: ready ? 1 : 0.4,
                     }}
                   >
-                    {builtin ? `${lv} · 官方流程` : `${lv} · ${count} 题`}
+                    {official ? `${lv} · 官方流程` : `${lv} · ${count} 题`}
                   </button>
                 );
               })}

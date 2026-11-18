@@ -1,4 +1,4 @@
-import type { ExamAid } from "../game/examBlueprint";
+import type { ExamAid } from "../game/speaking";
 
 /** 考试辅助材料面板：关键词、题卡、思维导图、双人日程。 */
 export default function ExamAidPanel({ aid }: { aid: ExamAid }) {
