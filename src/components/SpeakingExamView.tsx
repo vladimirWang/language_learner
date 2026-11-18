@@ -6,6 +6,7 @@ import {
   fetchGrammarCheck,
   fetchSpeakingExamParts,
   fetchSpeakingItems,
+  fetchSpeakingPlan,
   fetchSpeakingReply,
   loadSpeakingProgress,
   loadSpeakingSessions,
@@ -37,6 +38,8 @@ type Props = {
   initialLevel?: SpeakingLevel;
   /** 关卡中配置的口语话题（B1/B2 用作考试主题） */
   topic?: string;
+  /** 关卡中配置的口语方案 ID：提供时只抽取该方案内的题目 */
+  planId?: string;
   /** 完成整场考试后回调（用于标记关卡完成） */
   onFinish?: () => void;
 };
@@ -99,7 +102,7 @@ function wasAsked(prompt: string, history: ChatMessage[]): boolean {
   });
 }
 
-export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish }: Props) {
+export default function SpeakingExamView({ onExit, initialLevel, topic, planId, onFinish }: Props) {
   const [phase, setPhase] = useState<Phase>("select");
   const [level, setLevel] = useState<SpeakingLevel>(initialLevel ?? "A1");
   const [items, setItems] = useState<SpeakingItem[]>([]);
@@ -149,10 +152,10 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, onFinish
   const load = () => {
     setLoading(true);
     setError(null);
-    Promise.all([
-      fetchSpeakingItems({ lang: "de" }),
-      fetchSpeakingExamParts({ lang: "de" }),
-    ])
+    const itemsPromise = planId
+      ? fetchSpeakingPlan(planId).then((detail) => detail.items)
+      : fetchSpeakingItems({ lang: "de" });
+    Promise.all([itemsPromise, fetchSpeakingExamParts({ lang: "de" })])
       .then(([list, parts]) => {
         setItems(list);
         setExamParts(parts);

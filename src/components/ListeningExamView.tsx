@@ -43,6 +43,7 @@ export default function ListeningExamView({
   // 关卡内口语：话题为一个完整对话（≥5 轮），历史单题关联仍兼容
   const [speakingKey, setSpeakingKey] = useState<string | null>(null);
   const [topicKey, setTopicKey] = useState<string | null>(null);
+  const [planKey, setPlanKey] = useState<string | null>(null);
   const [completedSpeaking, setCompletedSpeaking] = useState<Set<string>>(new Set());
 
   // 加载 manifest + 预解析文件 URL
@@ -70,7 +71,9 @@ export default function ListeningExamView({
               ? ("listening" as const)
               : e.item_type === "speaking_topic"
                 ? ("speaking_topic" as const)
-                : ("speaking" as const),
+                : e.item_type === "speaking_plan"
+                  ? ("speaking_plan" as const)
+                  : ("speaking" as const),
           title: e.name || e.exam_id,
           lang: e.lang,
         })),
@@ -253,7 +256,23 @@ export default function ListeningExamView({
 
   const levelDoneCount = completedExams.size + completedSpeaking.size;
 
-  // 关卡内打开口语考试：按等级执行歌德考试流程（A1/A2 内置蓝图，B1/B2 用题库）
+  // 关卡内打开口语方案：只抽取方案内题目，按等级执行歌德考试流程
+  if (isLevelMode && planKey) {
+    const planTitle = levelRows.find((row) => row.examId === planKey)?.title;
+    return (
+      <SpeakingExamView
+        initialLevel={level!.difficulty}
+        planId={planKey}
+        topic={planTitle}
+        onExit={() => setPlanKey(null)}
+        onFinish={() => {
+          setCompletedSpeaking((prev) => new Set(prev).add(planKey));
+        }}
+      />
+    );
+  }
+
+  // 关卡内打开口语话题（兼容历史配置）
   if (isLevelMode && topicKey) {
     return (
       <SpeakingExamView
@@ -408,6 +427,8 @@ export default function ListeningExamView({
                           void enterExam(row.examId);
                         } else if (row.itemType === "speaking_topic") {
                           setTopicKey(row.examId);
+                        } else if (row.itemType === "speaking_plan") {
+                          setPlanKey(row.examId);
                         } else {
                           setSpeakingKey(row.examId);
                         }

@@ -222,6 +222,39 @@ export function fetchSpeakingExamParts(params?: {
   });
 }
 
+/** 口语方案：关卡里选择的口语入口，决定本场考试抽取哪些题目。 */
+export interface SpeakingPlan {
+  id: number;
+  lang: string;
+  level: string;
+  name: string;
+  description: string;
+  active: boolean;
+  item_count: number;
+}
+
+/** 拉取口语方案及其题目。 */
+export function fetchSpeakingPlan(id: string | number): Promise<{
+  plan: SpeakingPlan;
+  items: SpeakingItem[];
+}> {
+  return fetch(`${API_BASE}/api/speaking/plans/${id}`, {
+    headers: { Accept: "application/json" },
+  }).then(async (res) => {
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.error) msg = body.error;
+      } catch {
+        // ignore
+      }
+      throw new Error(msg);
+    }
+    return (await res.json()) as { plan: SpeakingPlan; items: SpeakingItem[] };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 本地练习记录（仅存本地，不上传）
 // ---------------------------------------------------------------------------
