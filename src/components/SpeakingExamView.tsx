@@ -45,6 +45,8 @@ interface ChatMessage {
 
 const PART_ORDER = ["part1_intro", "part2_presentation", "part3_discussion"];
 const MAX_FOLLOWUPS = 2;
+/** 发送给后端的最大历史消息数，覆盖整场考试（约 3 部分 × 多题），用于判重。 */
+const MAX_HISTORY_TURNS = 80;
 
 const LEVEL_COLORS: Record<SpeakingLevel, string> = {
   A1: "#4FBF58",
@@ -57,6 +59,25 @@ const LEVEL_COLORS: Record<SpeakingLevel, string> = {
 
 function initialRole(item: SpeakingItem): "examiner" | "partner" {
   return item.exam_part === "part3_discussion" && item.role === "partner" ? "partner" : "examiner";
+}
+
+const normalizeDE = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[.,!?;:"'„“”()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** 该题问句是否已在本场对话里问过（含 LLM 追问），用于换题时跳过重复问题。 */
+function wasAsked(prompt: string, history: ChatMessage[]): boolean {
+  const target = normalizeDE(prompt);
+  if (target.length < 8) return false;
+  return history.some((msg) => {
+    if (msg.role === "user") return false;
+    const text = normalizeDE(msg.text);
+    if (text.length >= 8 && target.includes(text)) return true;
+    return text.includes(target);
+  });
 }
 
 export default function SpeakingExamView({ onExit }: Props) {
@@ -96,6 +117,8 @@ export default function SpeakingExamView({ onExit }: Props) {
   const partStartedAt = useRef(0);
   const timedOutRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  /** 与 messages 同步的最新副本，供计时器等非渲染闭包使用。 */
+  const messagesRef = useRef<ChatMessage[]>([]);
   const [remainingSec, setRemainingSec] = useState(0);
   const [autoRead, setAutoRead] = useState(true);
   const [showSubtitle, setShowSubtitle] = useState(false);
@@ -143,7 +166,10 @@ export default function SpeakingExamView({ onExit }: Props) {
   ) => {
     msgID.current += 1;
     const msg: ChatMessage = { id: msgID.current, role, text, feedback, source };
-    setMessages((prev) => [...prev, msg]);
+    // 同步维护 ref，供计时器等闭包场景读取最新对话，避免重复提问。
+    const next = [...messagesRef.current, msg];
+    messagesRef.current = next;
+    setMessages(next);
     if (role !== "user") {
       questionShownAt.current = Date.now();
     }
@@ -174,6 +200,7 @@ export default function SpeakingExamView({ onExit }: Props) {
       perItem: {},
     };
     setMessages([]);
+    messagesRef.current = [];
     setAnswer("");
     setPartIndex(0);
     setItemIndex(0);
@@ -240,33 +267,48 @@ export default function SpeakingExamView({ onExit }: Props) {
     sfx.win();
   };
 
-  /** 跳到指定部分开头，并重置该部分的计时。 */
-  const jumpToPart = (index: number) => {
+  /** 从 (fromPart, fromItem) 起找到第一道「问句还没出现过」的题；都问过则返回 null。 */
+  const findNextUnasked = (fromPart: number, fromItem: number) => {
+    for (let p = fromPart; p < parts.length; p++) {
+      for (let i = p === fromPart ? fromItem : 0; i < parts[p].items.length; i++) {
+        if (!wasAsked(parts[p].items[i].prompt_de, messagesRef.current)) {
+          return { part: p, item: i };
+        }
+      }
+    }
+    return null;
+  };
+
+  /** 跳到指定部分的指定题目，并重置该部分的计时。 */
+  const jumpToPart = (index: number, itemStart = 0) => {
     const nextPart = parts[index];
-    if (!nextPart || nextPart.items.length === 0) return;
+    const nextItem = nextPart?.items[itemStart];
+    if (!nextPart || !nextItem) return;
     setPartIndex(index);
-    setItemIndex(0);
+    setItemIndex(itemStart);
     setExchanges(0);
     partStartedAt.current = Date.now();
     timedOutRef.current = false;
     setRemainingSec(PART_TIME_LIMIT_SEC[nextPart.key] ?? 240);
-    pushMessage(initialRole(nextPart.items[0]), nextPart.items[0].prompt_de);
+    pushMessage(initialRole(nextItem), nextItem.prompt_de);
   };
 
   const advance = () => {
     if (!currentPart) return;
-    if (itemIndex + 1 < currentPart.items.length) {
-      const next = currentPart.items[itemIndex + 1];
-      setItemIndex(itemIndex + 1);
-      setExchanges(0);
-      pushMessage(initialRole(next), next.prompt_de);
+    // 同一话题下有多道题，若某题问句已经在追问中出现过就跳过，避免换题后重复提问。
+    const next = findNextUnasked(partIndex, itemIndex + 1);
+    if (!next) {
+      finishExam();
       return;
     }
-    if (partIndex + 1 < parts.length) {
-      jumpToPart(partIndex + 1);
+    if (next.part !== partIndex) {
+      jumpToPart(next.part, next.item);
       return;
     }
-    finishExam();
+    const nextItem = currentPart.items[next.item];
+    setItemIndex(next.item);
+    setExchanges(0);
+    pushMessage(initialRole(nextItem), nextItem.prompt_de);
   };
 
   // 部分计时：到时直接进入下一部分，避免在同一部分内连续自动出题。
@@ -280,8 +322,9 @@ export default function SpeakingExamView({ onExit }: Props) {
       if (left > 0 || timedOutRef.current) return;
       // 每个部分只触发一次自动推进
       timedOutRef.current = true;
-      if (partIndex + 1 < parts.length) {
-        jumpToPart(partIndex + 1);
+      const next = partIndex + 1 < parts.length ? findNextUnasked(partIndex + 1, 0) : null;
+      if (next) {
+        jumpToPart(next.part, next.item);
       } else {
         finishExam();
       }
@@ -296,13 +339,15 @@ export default function SpeakingExamView({ onExit }: Props) {
     if (last && last.role !== "user") speakGerman(last.text);
   }, [messages, autoRead, phase]);
 
-  const requestReply = async (role: "examiner" | "partner", latestAnswer: string) => {
+  const requestReply = async (role: "examiner" | "partner") => {
     if (!currentItem || !currentPart) return;
     setBusy(true);
-    const history: SpeakingTurn[] = [
-      ...messages.slice(-8).map((msg) => ({ role: msg.role, text: msg.text })),
-      { role: "user" as const, text: latestAnswer },
-    ];
+    // 保留整场考试的对话上下文：后端靠 history 判断「已问过什么」，
+    // 截断过早会让长期记忆丢失，导致同一问题反复出现。
+    // 这里读 ref（已包含刚提交的回答），避免渲染闭包拿到过期消息。
+    const history: SpeakingTurn[] = messagesRef.current
+      .slice(-MAX_HISTORY_TURNS)
+      .map((msg) => ({ role: msg.role, text: msg.text }));
     const reply = await fetchSpeakingReply({
       level,
       examPart: currentPart.key,
@@ -406,7 +451,7 @@ export default function SpeakingExamView({ onExit }: Props) {
       );
       return;
     }
-    void requestReply(isDiscussion ? "partner" : "examiner", text);
+    void requestReply(isDiscussion ? "partner" : "examiner");
   };
 
   const skipItem = () => {
@@ -421,6 +466,7 @@ export default function SpeakingExamView({ onExit }: Props) {
   const backToSelect = () => {
     setPhase("select");
     setMessages([]);
+    messagesRef.current = [];
     setAnswer("");
     setReport(null);
   };
