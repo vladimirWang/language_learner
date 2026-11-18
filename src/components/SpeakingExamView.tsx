@@ -126,6 +126,8 @@ export default function SpeakingExamView({ onExit }: Props) {
   /** 与 messages 同步的最新副本，供计时器等非渲染闭包使用。 */
   const messagesRef = useRef<ChatMessage[]>([]);
   const [remainingSec, setRemainingSec] = useState(0);
+  /** 本部分时间到：只提示，不再自动提问。 */
+  const [timeUp, setTimeUp] = useState(false);
   const [autoRead, setAutoRead] = useState(true);
   const [showSubtitle, setShowSubtitle] = useState(false);
   const [recent, setRecent] = useState<SpeakingSessionReport[]>([]);
@@ -200,6 +202,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     replySeq.current = 0;
     partStartedAt.current = Date.now();
     timedOutRef.current = false;
+    setTimeUp(false);
     setRemainingSec(PART_TIME_LIMIT_SEC[parts[0].key] ?? 240);
     statsRef.current = {
       turns: 0,
@@ -303,6 +306,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     setExchanges(0);
     partStartedAt.current = Date.now();
     timedOutRef.current = false;
+    setTimeUp(false);
     setRemainingSec(PART_TIME_LIMIT_SEC[nextPart.key] ?? 240);
     pushMessage(initialRole(nextItem), nextItem.prompt_de);
   };
@@ -325,7 +329,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     pushMessage(initialRole(nextItem), nextItem.prompt_de);
   };
 
-  // 部分计时：到时直接进入下一部分，避免在同一部分内连续自动出题。
+  // 部分计时：到时只提示，不再自动提问；由考生决定继续作答还是进入下一部分。
   useEffect(() => {
     if (phase !== "exam" || !currentPart) return;
     const limit = PART_TIME_LIMIT_SEC[currentPart.key] ?? 240;
@@ -334,17 +338,22 @@ export default function SpeakingExamView({ onExit }: Props) {
       const left = Math.max(0, limit - elapsed);
       setRemainingSec(left);
       if (left > 0 || timedOutRef.current) return;
-      // 每个部分只触发一次自动推进
+      // 每个部分只提示一次，不在考生未作答时自动出下一题。
       timedOutRef.current = true;
-      const next = partIndex + 1 < parts.length ? findNextUnasked(partIndex + 1, 0) : null;
-      if (next) {
-        jumpToPart(next.part, next.item);
-      } else {
-        finishExam();
-      }
+      setTimeUp(true);
     }, 1000);
     return () => window.clearInterval(timer);
   }, [phase, partIndex, itemIndex, currentPart]);
+
+  /** 时间到后由考生主动进入下一部分（或结束整场练习）。 */
+  const continueAfterTimeout = () => {
+    const next = partIndex + 1 < parts.length ? findNextUnasked(partIndex + 1, 0) : null;
+    if (next) {
+      jumpToPart(next.part, next.item);
+    } else {
+      finishExam();
+    }
+  };
 
   // 自动朗读考官/搭档的新消息（系统 TTS 不可用时静默跳过）。
   useEffect(() => {
@@ -915,6 +924,33 @@ export default function SpeakingExamView({ onExit }: Props) {
               当前话题：{currentItem.topic}
               {currentItem.prompt_zh ? ` · ${currentItem.prompt_zh}` : ""}
               {currentItem.error_note ? ` · 提示：${currentItem.error_note}` : ""}
+            </div>
+          )}
+
+          {timeUp && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "8px 12px",
+                borderRadius: 10,
+                background: "rgba(192,57,43,.08)",
+                color: "#C0392B",
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <span>本部分时间到，考官已停止自动提问。你可以继续作答，或进入下一部分。</span>
+              <button
+                className="btn ghost"
+                style={{ fontSize: 12, padding: "4px 10px", whiteSpace: "nowrap" }}
+                onClick={continueAfterTimeout}
+                disabled={busy}
+              >
+                {partIndex + 1 < parts.length ? "进入下一部分" : "结束练习"}
+              </button>
             </div>
           )}
 
