@@ -38,6 +38,72 @@ export interface SpeakingFeedback {
   startsUpper: boolean
   /** 是否有句末标点 */
   endsPunct: boolean
+  /** 是否与当前话题和要点毫无重合（疑似跑题） */
+  offTopic: boolean
+}
+
+/** 各部分的建议时长（秒）；到时自动推进到下一部分。 */
+export const PART_TIME_LIMIT_SEC: Record<string, number> = {
+  part1_intro: 240,
+  part2_presentation: 180,
+  part3_discussion: 240,
+}
+
+const TOPIC_STOPWORDS = new Set([
+  "aber", "alle", "auch", "beim", "bitte", "dann", "dass", "dein", "dem", "den",
+  "der", "die", "dies", "doch", "dort", "eine", "einen", "einer", "eines", "eure",
+  "für", "geht", "gern", "gerne", "habe", "haben", "hast", "ihre", "immer", "kann",
+  "kein", "keine", "können", "mich", "mir", "mit", "nach", "nicht", "noch", "oder",
+  "ohne", "schon", "sehr", "sein", "sich", "sie", "sind", "über", "und", "unter",
+  "viel", "vom", "von", "was", "wenn", "wer", "wie", "wird", "wir", "wohl", "zum",
+  "zur",
+])
+
+function contentWords(text: string): Set<string> {
+  const words = text.toLowerCase().match(/[a-zäöüß]{4,}/g) ?? []
+  return new Set(words.filter((w) => !TOPIC_STOPWORDS.has(w)))
+}
+
+/** 脚本模式的轻量批改：只做要点覆盖与基本书写规范检查，不作为评分。 */
+export function evaluateAnswer(item: SpeakingItem, answer: string): SpeakingFeedback {
+  const text = answer.trim()
+  const lower = text.toLowerCase()
+  const points = parsePoints(item.expected_points)
+  const covered = points.filter((p) => lower.includes(p.toLowerCase()))
+  const missing = points.filter((p) => !lower.includes(p.toLowerCase()))
+
+  const answerWords = contentWords(text)
+  const topicWords = contentWords(
+    `${item.topic} ${item.prompt_de} ${points.join(" ")}`,
+  )
+  let overlap = 0
+  for (const word of answerWords) {
+    if (topicWords.has(word)) overlap += 1
+  }
+  const offTopic = answerWords.size >= 4 && overlap === 0
+
+  return {
+    covered,
+    missing,
+    tooShort: text.length < 8,
+    startsUpper: !!text && text[0] === text[0].toUpperCase(),
+    endsPunct: /[.!?]$/.test(text),
+    offTopic,
+  }
+}
+
+/** 用系统语音朗读德语；不支持时静默降级。 */
+export function speakGerman(text: string): void {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return
+  try {
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = "de-DE"
+    utterance.rate = 0.95
+    window.speechSynthesis.speak(utterance)
+  } catch {
+    // 忽略：TTS 不可用不影响练习
+  }
 }
 
 const PART_LABELS: Record<string, string> = {
@@ -58,22 +124,6 @@ export function parsePoints(raw: string): string[] {
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : []
   } catch {
     return []
-  }
-}
-
-/** 脚本模式的轻量批改：只做要点覆盖与基本书写规范检查，不作为评分。 */
-export function evaluateAnswer(item: SpeakingItem, answer: string): SpeakingFeedback {
-  const text = answer.trim()
-  const lower = text.toLowerCase()
-  const points = parsePoints(item.expected_points)
-  const covered = points.filter((p) => lower.includes(p.toLowerCase()))
-  const missing = points.filter((p) => !lower.includes(p.toLowerCase()))
-  return {
-    covered,
-    missing,
-    tooShort: text.length < 8,
-    startsUpper: !!text && text[0] === text[0].toUpperCase(),
-    endsPunct: /[.!?]$/.test(text),
   }
 }
 

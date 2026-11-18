@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  PART_TIME_LIMIT_SEC,
   SPEAKING_LEVELS,
   evaluateAnswer,
   fetchSpeakingItems,
@@ -9,6 +10,7 @@ import {
   saveSpeakingError,
   saveSpeakingProgress,
   saveSpeakingSession,
+  speakGerman,
   partLabel,
   topMissingPoints,
   type SpeakingFeedback,
@@ -86,7 +88,10 @@ export default function SpeakingExamView({ onExit }: Props) {
   const msgID = useRef(0);
   const replySeq = useRef(0);
   const questionShownAt = useRef(0);
+  const partStartedAt = useRef(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [remainingSec, setRemainingSec] = useState(0);
+  const [autoRead, setAutoRead] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -140,6 +145,8 @@ export default function SpeakingExamView({ onExit }: Props) {
     if (parts.length === 0) return;
     startedAtRef.current = Date.now();
     replySeq.current = 0;
+    partStartedAt.current = Date.now();
+    setRemainingSec(PART_TIME_LIMIT_SEC[parts[0].key] ?? 240);
     statsRef.current = {
       turns: 0,
       pointsTotal: 0,
@@ -220,11 +227,33 @@ export default function SpeakingExamView({ onExit }: Props) {
       setPartIndex(partIndex + 1);
       setItemIndex(0);
       setExchanges(0);
+      partStartedAt.current = Date.now();
+      setRemainingSec(PART_TIME_LIMIT_SEC[nextPart.key] ?? 240);
       pushMessage(initialRole(nextPart.items[0]), nextPart.items[0].prompt_de);
       return;
     }
     finishExam();
   };
+
+  // 部分计时：到时自动推进到下一部分，最后一部分结束则出报告。
+  useEffect(() => {
+    if (phase !== "exam" || !currentPart) return;
+    const limit = PART_TIME_LIMIT_SEC[currentPart.key] ?? 240;
+    const timer = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - partStartedAt.current) / 1000);
+      const left = Math.max(0, limit - elapsed);
+      setRemainingSec(left);
+      if (left <= 0) advance();
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [phase, partIndex, itemIndex, currentPart]);
+
+  // 自动朗读考官/搭档的新消息（系统 TTS 不可用时静默跳过）。
+  useEffect(() => {
+    if (!autoRead || phase !== "exam") return;
+    const last = messages[messages.length - 1];
+    if (last && last.role !== "user") speakGerman(last.text);
+  }, [messages, autoRead, phase]);
 
   const requestReply = async (role: "examiner" | "partner", latestAnswer: string) => {
     if (!currentItem || !currentPart) return;
@@ -304,6 +333,16 @@ export default function SpeakingExamView({ onExit }: Props) {
         stats.completedKeys.push(currentItem.item_key);
       }
       advance();
+      return;
+    }
+    // 跑题时把话题拉回，不再发起 LLM 追问。
+    if (feedback.offTopic) {
+      pushMessage(
+        "examiner",
+        `Bleiben wir bitte beim Thema: ${currentItem.topic}. ${currentItem.prompt_de}`,
+        undefined,
+        "template",
+      );
       return;
     }
     void requestReply(isDiscussion ? "partner" : "examiner", text);
@@ -521,9 +560,17 @@ export default function SpeakingExamView({ onExit }: Props) {
           {level} · {currentPart ? partLabel(currentPart.key) : "口语模拟"}
         </span>
         <span className="quiz-count">
-          题目 {Math.min(itemIndex + 1, currentPart?.items.length ?? 0)} /{" "}
+          剩余 {Math.floor(remainingSec / 60)}:{String(remainingSec % 60).padStart(2, "0")} · 题目{" "}
+          {Math.min(itemIndex + 1, currentPart?.items.length ?? 0)} /{" "}
           {currentPart?.items.length ?? 0}
         </span>
+        <button
+          className="btn ghost"
+          style={{ marginLeft: 8, fontSize: 12, padding: "4px 10px" }}
+          onClick={() => setAutoRead((v) => !v)}
+        >
+          🔊 {autoRead ? "自动朗读中" : "自动朗读"}
+        </button>
       </div>
 
       <div className="play-body">
@@ -567,6 +614,22 @@ export default function SpeakingExamView({ onExit }: Props) {
                         {msg.source === "llm" ? "AI" : "模板"}
                       </span>
                     )}
+                    {msg.role !== "user" && (
+                      <button
+                        onClick={() => speakGerman(msg.text)}
+                        style={{
+                          marginLeft: 8,
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontSize: 12,
+                          padding: 0,
+                        }}
+                        title="朗读"
+                      >
+                        🔊
+                      </button>
+                    )}
                   </div>
                   <div style={{ fontSize: 15, lineHeight: 1.6 }}>{msg.text}</div>
                   {msg.feedback && (
@@ -575,6 +638,9 @@ export default function SpeakingExamView({ onExit }: Props) {
                       {msg.feedback.covered.length + msg.feedback.missing.length}
                       {msg.feedback.missing.length > 0 &&
                         ` · 还可补充：${msg.feedback.missing.join(" / ")}`}
+                      {msg.feedback.offTopic && (
+                        <span style={{ color: "#D9534F", marginLeft: 6 }}>· 可能跑题</span>
+                      )}
                     </div>
                   )}
                 </div>
