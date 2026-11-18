@@ -5,9 +5,12 @@ import {
   fetchSpeakingItems,
   fetchSpeakingReply,
   loadSpeakingProgress,
+  reportToMarkdown,
+  saveSpeakingError,
   saveSpeakingProgress,
   saveSpeakingSession,
   partLabel,
+  topMissingPoints,
   type SpeakingFeedback,
   type SpeakingItem,
   type SpeakingLevel,
@@ -33,6 +36,8 @@ interface ChatMessage {
   role: "user" | "examiner" | "partner";
   text: string;
   feedback?: SpeakingFeedback;
+  /** 非用户消息的来源：LLM 生成或模板兜底 */
+  source?: "llm" | "template";
 }
 
 const PART_ORDER = ["part1_intro", "part2_presentation", "part3_discussion"];
@@ -74,8 +79,13 @@ export default function SpeakingExamView({ onExit }: Props) {
     missing: {} as Record<string, number>,
     itemsDone: 0,
     completedKeys: [] as string[],
+    latencies: [] as number[],
+    words: 0,
+    duplicateWords: 0,
   });
   const msgID = useRef(0);
+  const replySeq = useRef(0);
+  const questionShownAt = useRef(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const load = () => {
@@ -112,15 +122,24 @@ export default function SpeakingExamView({ onExit }: Props) {
   const currentItem = currentPart?.items[itemIndex] ?? null;
   const totalItems = parts.reduce((sum, part) => sum + part.items.length, 0);
 
-  const pushMessage = (role: ChatMessage["role"], text: string, feedback?: SpeakingFeedback) => {
+  const pushMessage = (
+    role: ChatMessage["role"],
+    text: string,
+    feedback?: SpeakingFeedback,
+    source?: ChatMessage["source"],
+  ) => {
     msgID.current += 1;
-    const msg: ChatMessage = { id: msgID.current, role, text, feedback };
+    const msg: ChatMessage = { id: msgID.current, role, text, feedback, source };
     setMessages((prev) => [...prev, msg]);
+    if (role !== "user") {
+      questionShownAt.current = Date.now();
+    }
   };
 
   const startExam = () => {
     if (parts.length === 0) return;
     startedAtRef.current = Date.now();
+    replySeq.current = 0;
     statsRef.current = {
       turns: 0,
       pointsTotal: 0,
@@ -128,6 +147,9 @@ export default function SpeakingExamView({ onExit }: Props) {
       missing: {},
       itemsDone: 0,
       completedKeys: [],
+      latencies: [],
+      words: 0,
+      duplicateWords: 0,
     };
     setMessages([]);
     setAnswer("");
@@ -147,6 +169,12 @@ export default function SpeakingExamView({ onExit }: Props) {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
       .map(([point]) => point);
+    const avgLatency =
+      stats.latencies.length > 0
+        ? Math.round(stats.latencies.reduce((sum, v) => sum + v, 0) / stats.latencies.length)
+        : 0;
+    const maxLatency = stats.latencies.length > 0 ? Math.max(...stats.latencies) : 0;
+    const repetitionRatio = stats.words > 0 ? stats.duplicateWords / stats.words : 0;
     const result: SpeakingSessionReport = {
       id: `sp-${Date.now()}`,
       level,
@@ -164,6 +192,9 @@ export default function SpeakingExamView({ onExit }: Props) {
         missingSorted.length > 0
           ? `建议重点复习这些要点：${missingSorted.join("、")}`
           : "要点覆盖良好，继续保持，并尝试用更完整的句子表达。",
+      avg_response_ms: avgLatency,
+      max_response_ms: maxLatency,
+      repetition_ratio: repetitionRatio,
     };
     saveSpeakingSession(result);
     const boosted = Array.from(
@@ -195,11 +226,7 @@ export default function SpeakingExamView({ onExit }: Props) {
     finishExam();
   };
 
-  const requestReply = async (
-    role: "examiner" | "partner",
-    nextExchange: number,
-    latestAnswer: string,
-  ) => {
+  const requestReply = async (role: "examiner" | "partner", latestAnswer: string) => {
     if (!currentItem || !currentPart) return;
     setBusy(true);
     const history: SpeakingTurn[] = [
@@ -212,15 +239,16 @@ export default function SpeakingExamView({ onExit }: Props) {
       topic: currentItem.topic,
       role,
       history,
-      followupCount: nextExchange,
+      followupCount: replySeq.current,
       promptDE: currentItem.prompt_de,
     });
+    replySeq.current += 1;
     setBusy(false);
-    if (reply) {
-      pushMessage(role, reply);
+    if (reply.reply) {
+      pushMessage(role, reply.reply, undefined, reply.source);
     } else {
       // 后端已内置模板兜底，这里再兜一层，避免对话中断
-      pushMessage(role, "Können Sie das noch etwas genauer erklären?");
+      pushMessage(role, "Können Sie das noch etwas genauer erklären?", undefined, "template");
     }
   };
 
@@ -235,12 +263,34 @@ export default function SpeakingExamView({ onExit }: Props) {
     for (const point of feedback.missing) {
       stats.missing[point] = (stats.missing[point] ?? 0) + 1;
     }
+    // 流利度近似指标（文本模式）：响应耗时与重复词比例
+    if (questionShownAt.current > 0) {
+      stats.latencies.push(Date.now() - questionShownAt.current);
+    }
+    const words = text
+      .toLowerCase()
+      .replace(/[.,!?;:"'„“”()]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+    stats.words += words.length;
+    stats.duplicateWords += words.length - new Set(words).size;
+
     pushMessage("user", text, feedback);
     setAnswer("");
     if (feedback.missing.length === 0 && !feedback.tooShort) {
       sfx.correct();
     } else {
       sfx.tap();
+    }
+    if (feedback.missing.length > 0) {
+      saveSpeakingError({
+        item_key: currentItem.item_key,
+        level,
+        topic: currentItem.topic,
+        prompt_de: currentItem.prompt_de,
+        missing_points: feedback.missing,
+        created_at: new Date().toISOString(),
+      });
     }
 
     const nextExchange = exchanges + 1;
@@ -256,7 +306,7 @@ export default function SpeakingExamView({ onExit }: Props) {
       advance();
       return;
     }
-    void requestReply(isDiscussion ? "partner" : "examiner", nextExchange, text);
+    void requestReply(isDiscussion ? "partner" : "examiner", text);
   };
 
   const skipItem = () => {
@@ -273,6 +323,21 @@ export default function SpeakingExamView({ onExit }: Props) {
     setMessages([]);
     setAnswer("");
     setReport(null);
+  };
+
+  const exportReport = () => {
+    if (!report) return;
+    const blob = new Blob([reportToMarkdown(report)], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `speaking-report-${report.level}-${report.id}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   };
 
   // ========== 选择等级 ==========
@@ -332,6 +397,27 @@ export default function SpeakingExamView({ onExit }: Props) {
                 开始 {level} 模拟
               </button>
             </div>
+
+            {topMissingPoints(5).length > 0 && (
+              <div style={{ marginTop: 26 }}>
+                <h3 style={{ fontSize: 15, marginBottom: 8 }}>历史高频遗漏要点</h3>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {topMissingPoints(5).map((item) => (
+                    <span
+                      key={item.point}
+                      style={{
+                        background: "#FFF1D9",
+                        borderRadius: 6,
+                        padding: "3px 9px",
+                        fontSize: 13,
+                      }}
+                    >
+                      {item.point} × {item.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -395,10 +481,23 @@ export default function SpeakingExamView({ onExit }: Props) {
                 </div>
               </div>
             )}
+            <div style={{ background: "#F4FBF4", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, color: "#4FBF58", marginBottom: 6 }}>
+                流利度（文本模式近似）
+              </div>
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 14 }}>
+                <span>平均响应 {(report.avg_response_ms / 1000).toFixed(1)} 秒</span>
+                <span>最长响应 {(report.max_response_ms / 1000).toFixed(1)} 秒</span>
+                <span>重复词占比 {Math.round(report.repetition_ratio * 100)}%</span>
+              </div>
+            </div>
             <p style={{ color: "#6b6156", fontSize: 14 }}>{report.suggested_review}</p>
             <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
               <button className="btn primary" onClick={backToSelect}>
                 再练一次
+              </button>
+              <button className="btn ghost" onClick={exportReport}>
+                导出报告
               </button>
               <button className="btn ghost" onClick={onExit}>
                 返回地图
@@ -463,6 +562,11 @@ export default function SpeakingExamView({ onExit }: Props) {
                 >
                   <div style={{ fontSize: 11, color: "#8a7d6b", marginBottom: 4 }}>
                     {msg.role === "user" ? "你" : msg.role === "partner" ? "搭档" : "考官"}
+                    {msg.role !== "user" && msg.source && (
+                      <span style={{ marginLeft: 6, color: "#b3a99a" }}>
+                        {msg.source === "llm" ? "AI" : "模板"}
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 15, lineHeight: 1.6 }}>{msg.text}</div>
                   {msg.feedback && (

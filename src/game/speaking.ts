@@ -151,8 +151,15 @@ export interface SpeakingReplyParams {
   promptDE: string
 }
 
+export interface SpeakingReplyResult {
+  reply: string
+  source: "llm" | "template"
+}
+
 /** 请求下一句考官追问或搭档回应；失败时返回空串由调用方兜底。 */
-export async function fetchSpeakingReply(params: SpeakingReplyParams): Promise<string> {
+export async function fetchSpeakingReply(
+  params: SpeakingReplyParams,
+): Promise<SpeakingReplyResult> {
   try {
     const res = await fetch(`${API_BASE}/api/speaking/reply`, {
       method: "POST",
@@ -168,11 +175,14 @@ export async function fetchSpeakingReply(params: SpeakingReplyParams): Promise<s
         prompt_de: params.promptDE,
       }),
     })
-    if (!res.ok) return ""
-    const body = (await res.json()) as { reply?: string }
-    return (body.reply ?? "").trim()
+    if (!res.ok) return { reply: "", source: "template" }
+    const body = (await res.json()) as { reply?: string; source?: string }
+    return {
+      reply: (body.reply ?? "").trim(),
+      source: body.source === "llm" ? "llm" : "template",
+    }
   } catch {
-    return ""
+    return { reply: "", source: "template" }
   }
 }
 
@@ -196,6 +206,10 @@ export interface SpeakingSessionReport {
   points_covered: number
   missing_points: string[]
   suggested_review: string
+  /** 流利度：平均/最长响应耗时（毫秒）与重复词占比 */
+  avg_response_ms: number
+  max_response_ms: number
+  repetition_ratio: number
 }
 
 export function loadSpeakingSessions(): SpeakingSessionReport[] {
@@ -216,4 +230,85 @@ export function saveSpeakingSession(report: SpeakingSessionReport): void {
   } catch {
     // 本地存储不可用时忽略
   }
+}
+
+// ---------------------------------------------------------------------------
+// 错题沉淀：记录反复遗漏的要点，供下次练习前复习
+// ---------------------------------------------------------------------------
+
+const ERROR_KEY = "speaking.errors.v1"
+
+export interface SpeakingErrorEntry {
+  item_key: string
+  level: string
+  topic: string
+  prompt_de: string
+  missing_points: string[]
+  created_at: string
+}
+
+export function loadSpeakingErrors(): SpeakingErrorEntry[] {
+  try {
+    const raw = localStorage.getItem(ERROR_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as SpeakingErrorEntry[]) : []
+  } catch {
+    return []
+  }
+}
+
+/** 追加一条错题记录（同题覆盖旧记录），最多保留 100 条。 */
+export function saveSpeakingError(entry: SpeakingErrorEntry): void {
+  try {
+    const list = [entry, ...loadSpeakingErrors().filter((e) => e.item_key !== entry.item_key)]
+    localStorage.setItem(ERROR_KEY, JSON.stringify(list.slice(0, 100)))
+  } catch {
+    // 本地存储不可用时忽略
+  }
+}
+
+/** 汇总历史遗漏要点，按出现次数从高到低返回。 */
+export function topMissingPoints(limit = 5): { point: string; count: number }[] {
+  const counter = new Map<string, number>()
+  for (const entry of loadSpeakingErrors()) {
+    for (const point of entry.missing_points) {
+      counter.set(point, (counter.get(point) ?? 0) + 1)
+    }
+  }
+  return [...counter.entries()]
+    .map(([point, count]) => ({ point, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit)
+}
+
+// ---------------------------------------------------------------------------
+// 报告导出（Markdown）
+// ---------------------------------------------------------------------------
+
+export function reportToMarkdown(report: SpeakingSessionReport): string {
+  const coverage =
+    report.points_total > 0
+      ? Math.round((report.points_covered / report.points_total) * 100)
+      : 0;
+  const lines = [
+    `# 口语练习报告（${report.level}）`,
+    "",
+    `- 开始时间：${new Date(report.started_at).toLocaleString("zh-CN")}`,
+    `- 结束时间：${new Date(report.ended_at).toLocaleString("zh-CN")}`,
+    `- 练习时长：${report.duration_sec} 秒`,
+    `- 回答轮次：${report.turn_count}`,
+    `- 完成题目：${report.items_completed}/${report.items_total}`,
+    `- 要点覆盖率：${coverage}%（${report.points_covered}/${report.points_total}）`,
+    `- 平均响应耗时：${(report.avg_response_ms / 1000).toFixed(1)} 秒`,
+    `- 最长响应耗时：${(report.max_response_ms / 1000).toFixed(1)} 秒`,
+    `- 重复词占比：${Math.round(report.repetition_ratio * 100)}%`,
+    "",
+  ];
+  if (report.missing_points.length > 0) {
+    lines.push("## 高频遗漏要点", "", ...report.missing_points.map((p) => `- ${p}`), "");
+  }
+  lines.push("## 建议", "", report.suggested_review, "");
+  lines.push("> 机器批改仅用于练习辅助，不能替代歌德官方人工口试。");
+  return lines.join("\n");
 }
