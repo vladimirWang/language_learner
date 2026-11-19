@@ -90,6 +90,35 @@ interface RequirementState extends GrammarRequirement {
 }
 
 const PART_ORDER = ["part1_intro", "part2_presentation", "part3_discussion"];
+
+const WORD_TYPE_LABELS: Record<string, string> = {
+  noun: "名词",
+  verb: "动词",
+  adj: "形容词",
+  adv: "副词",
+  pronoun: "代词",
+  preposition: "介词",
+  conj: "连词",
+  article: "冠词",
+  num: "数词",
+  phrase: "短语",
+};
+
+const GENDER_LABELS: Record<string, string> = {
+  m: "阳性",
+  f: "阴性",
+  n: "中性",
+  mf: "阴阳性",
+};
+
+/** 拼接每日新词的词性 / 性别 / 复数说明。 */
+function dailyWordMeta(word: DailyWord): string {
+  const parts: string[] = [];
+  if (word.word_type) parts.push(WORD_TYPE_LABELS[word.word_type] ?? word.word_type);
+  if (word.gender) parts.push(GENDER_LABELS[word.gender] ?? word.gender);
+  if (word.plural) parts.push(`复数 ${word.plural}`);
+  return parts.join(" · ");
+}
 /** 发送给后端的最大历史消息数，覆盖整场考试（约 3 部分 × 多题），用于判重。 */
 const MAX_HISTORY_TURNS = 80;
 
@@ -172,11 +201,14 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
   const deviceId = useRef(getDeviceId());
   const [dailyWords, setDailyWords] = useState<DailyWord[]>([]);
   const [dailyDate, setDailyDate] = useState("");
+  const [dailyLoaded, setDailyLoaded] = useState(false);
   const [markedWords, setMarkedWords] = useState<number[]>([]);
 
   // 语法要求：整场累计，未达成时阻断推进
   const [requirements, setRequirements] = useState<RequirementState[]>([]);
   const requirementsRef = useRef<RequirementState[]>([]);
+  // 同一句回答只计一次，避免重复提交刷达成次数
+  const evaluatedAnswersRef = useRef<Set<string>>(new Set());
   const [pendingAdvance, setPendingAdvance] = useState(false);
   const [supplementMode, setSupplementMode] = useState(false);
   const [supplementText, setSupplementText] = useState("");
@@ -236,6 +268,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
       if (cancelled) return;
       setDailyWords(result.words ?? []);
       setDailyDate(result.date);
+      setDailyLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -352,6 +385,11 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
    */
   const evaluateRequirements = async (text: string): Promise<boolean> => {
     if (!planID || requirementsRef.current.length === 0) return true;
+    const normalized = text.trim().toLowerCase();
+    if (!normalized) return !hasUnmetBlocking();
+    // 同一句回答只计 1 次（方案 9.2）
+    if (evaluatedAnswersRef.current.has(normalized)) return !hasUnmetBlocking();
+    evaluatedAnswersRef.current.add(normalized);
     const alreadyMet = requirementsRef.current.filter((r) => r.met).map((r) => r.key);
     const result = await checkGrammarRequirements({
       planId: planID,
@@ -432,6 +470,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     }));
     requirementsRef.current = resetRequirements;
     setRequirements(resetRequirements);
+    evaluatedAnswersRef.current = new Set();
     recentUsedRef.current = new Set();
     setPendingAdvance(false);
     setSupplementMode(false);
@@ -873,7 +912,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
               学习记录保存在本机，清除缓存或更换设备会视为新用户。
             </p>
 
-            {dailyWordsEnabled() && dailyWords.length > 0 && (
+            {dailyWordsEnabled() && (
               <div
                 style={{
                   background: "#fff",
@@ -885,27 +924,61 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <strong style={{ fontSize: 14 }}>今日新词{dailyDate ? ` · ${dailyDate}` : ""}</strong>
-                  <button
-                    className="btn ghost"
-                    style={{ fontSize: 12, padding: "3px 10px" }}
-                    onClick={markAllDailyWords}
-                    disabled={dailyWords.every((word) => markedWords.includes(word.word_id))}
-                  >
-                    {dailyWords.every((word) => markedWords.includes(word.word_id))
-                      ? "已标记学会"
-                      : "学会了"}
-                  </button>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                  {dailyWords.map((word) => (
-                    <span
-                      key={word.word_id}
-                      style={{ background: "#F1F8FF", borderRadius: 6, padding: "3px 9px", fontSize: 13 }}
+                  {dailyWords.length > 0 && (
+                    <button
+                      className="btn ghost"
+                      style={{ fontSize: 12, padding: "3px 10px" }}
+                      onClick={markAllDailyWords}
+                      disabled={dailyWords.every((word) => markedWords.includes(word.word_id))}
                     >
-                      {word.lemma} · {word.chinese_mean}
-                    </span>
-                  ))}
+                      {dailyWords.every((word) => markedWords.includes(word.word_id))
+                        ? "已标记学会"
+                        : "学会了"}
+                    </button>
+                  )}
                 </div>
+
+                {dailyWords.length > 0 ? (
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                    {dailyWords.map((word) => {
+                      const marked = markedWords.includes(word.word_id);
+                      return (
+                        <div
+                          key={word.word_id}
+                          style={{
+                            background: "#F1F8FF",
+                            borderRadius: 8,
+                            padding: "8px 10px",
+                            minWidth: 170,
+                            maxWidth: 260,
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                            <strong style={{ fontSize: 14 }}>
+                              {marked ? "✓ " : ""}
+                              {word.lemma}
+                            </strong>
+                            <span style={{ fontSize: 12, color: "#6b6156" }}>{word.chinese_mean}</span>
+                          </div>
+                          {dailyWordMeta(word) && (
+                            <div style={{ fontSize: 12, color: "#8a7d6b", marginTop: 2 }}>
+                              {dailyWordMeta(word)}
+                            </div>
+                          )}
+                          {word.example_de && (
+                            <div style={{ fontSize: 12, color: "#6b6156", marginTop: 4, fontStyle: "italic" }}>
+                              {word.example_de}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  dailyLoaded && (
+                    <div style={{ fontSize: 13, color: "#8a7d6b", marginTop: 8 }}>词库准备中，稍后再来看看。</div>
+                  )
+                )}
               </div>
             )}
 
