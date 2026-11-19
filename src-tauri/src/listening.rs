@@ -56,6 +56,12 @@ pub struct Question {
     pub options: Vec<String>,
     #[serde(default)]
     pub image_time: Option<f64>,
+    /// AI 生成听力的题干文字（builder 产物里没有，靠图片/OCR 呈现）
+    #[serde(default)]
+    pub question: Option<String>,
+    /// AI 生成听力的说话人列表
+    #[serde(default)]
+    pub speakers: Vec<String>,
 }
 
 fn listening_root(app: &AppHandle) -> Result<PathBuf, String> {

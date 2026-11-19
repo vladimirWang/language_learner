@@ -21,6 +21,8 @@ export type ListeningQuestion = {
   answer?: string;  // "A" / "B" / "C" / "D"
   options: string[];
   imageTime?: number;
+  question?: string;   // AI 生成听力的题干文字（builder 产物里没有，靠图片/OCR 呈现）
+  speakers?: string[]; // AI 生成听力的说话人列表
 };
 
 export type ListeningManifest = {

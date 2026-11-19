@@ -170,6 +170,10 @@ export default function ListeningExamView({
     [manifest, current],
   );
 
+  // DEBUG: 临时打印，确认 answer 在 JS 侧的值
+  // eslint-disable-next-line no-console
+  question && console.log(`[DEBUG] Q${question.number}: answer=${JSON.stringify(question.answer)} (typeof=${typeof question.answer}), hasAnswer=${!!question.answer}, options=${JSON.stringify(question.options)}`);
+
   const score = useMemo(() => {
     if (!manifest) return { correct: 0, total: 0 };
     let correct = 0;
@@ -608,23 +612,53 @@ export default function ListeningExamView({
             <h2>听音频，选一个正确答案</h2>
           </div>
 
-          {/* 题干画面（视频抽帧） */}
-          <div style={{ textAlign: "center", marginBottom: 16 }}>
+          {/* 题干区：有图片显示图片；AI 生成听力无图片但有 question 文字时显示题干 */}
+          <div style={{ marginBottom: 16 }}>
             {imageUrls[num] ? (
-              <img
-                src={imageUrls[num]}
-                alt="题干画面"
+              <div style={{ textAlign: "center" }}>
+                <img
+                  src={imageUrls[num]}
+                  alt="题干画面"
+                  style={{
+                    maxWidth: "100%",
+                    maxHeight: 280,
+                    borderRadius: 10,
+                    boxShadow: "0 2px 10px rgba(0,0,0,.08)",
+                  }}
+                />
+              </div>
+            ) : question?.question ? (
+              <div
                 style={{
-                  maxWidth: "100%",
-                  maxHeight: 280,
+                  padding: "18px 22px",
+                  background: "#FFFBEB",
                   borderRadius: 10,
-                  boxShadow: "0 2px 10px rgba(0,0,0,.08)",
+                  border: "1px solid #F5E68A",
+                  fontSize: 16,
+                  lineHeight: 1.6,
+                  color: "#5C4A00",
+                  textAlign: "center",
                 }}
-              />
+              >
+                {question.question}
+              </div>
+            ) : question?.ocrText ? (
+              <div
+                style={{
+                  padding: "14px 18px",
+                  background: "#f5f5f5",
+                  borderRadius: 10,
+                  color: "#666",
+                  fontSize: 13,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {question.ocrText}
+              </div>
             ) : (
               <div
                 style={{
-                  height: 180,
+                  height: 100,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
