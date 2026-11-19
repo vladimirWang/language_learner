@@ -111,6 +111,12 @@ const GENDER_LABELS: Record<string, string> = {
   mf: "阴阳性",
 };
 
+/** 从 source_path 取语法文档标题，供要求说明与报告复习入口展示。 */
+function requirementDocTitle(sourcePath: string): string {
+  const base = sourcePath.split("/").pop() ?? sourcePath;
+  return base.replace(/\.md$/i, "");
+}
+
 /** 拼接每日新词的词性 / 性别 / 复数说明。 */
 function dailyWordMeta(word: DailyWord): string {
   const parts: string[] = [];
@@ -210,6 +216,8 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
   // 同一句回答只计一次，避免重复提交刷达成次数
   const evaluatedAnswersRef = useRef<Set<string>>(new Set());
   const [pendingAdvance, setPendingAdvance] = useState(false);
+  const [readyToFinish, setReadyToFinish] = useState(false);
+  const [showRequirementHelp, setShowRequirementHelp] = useState(false);
   const [supplementMode, setSupplementMode] = useState(false);
   const [supplementText, setSupplementText] = useState("");
   const [supplementAttempts, setSupplementAttempts] = useState(0);
@@ -428,6 +436,21 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
       .filter((req) => req.enforce === "block" && !req.met)
       .map((req) => req.label);
 
+  /** 当前仍未达成的阻断项；用于展示定向引导问句。 */
+  const unmetBlocking = requirements.filter((req) => req.enforce === "block" && !req.met);
+
+  /** 按尝试次数轮换语法点的引导问句，优先使用未达成的要求。 */
+  const guidanceFor = (req: RequirementState): string => {
+    const list = req.prompts ?? [];
+    if (list.length === 0) return "";
+    return list[Math.min(req.attempts, list.length - 1)] ?? list[0];
+  };
+
+  const nextGuidancePrompt = (): string => {
+    const target = unmetBlocking.find((req) => (req.prompts?.length ?? 0) > 0);
+    return target ? guidanceFor(target) : "";
+  };
+
   useEffect(() => {
     if (phase !== "select") return;
     setRecent(loadSpeakingSessions().slice(0, 3));
@@ -473,6 +496,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     evaluatedAnswersRef.current = new Set();
     recentUsedRef.current = new Set();
     setPendingAdvance(false);
+    setReadyToFinish(false);
     setSupplementMode(false);
     setSupplementText("");
     setSupplementAttempts(0);
@@ -530,6 +554,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
       requirements: requirementsRef.current.map((req) => ({
         key: req.key,
         label: req.label,
+        source_path: req.source_path,
         enforce: req.enforce,
         required: req.required,
         achieved: req.achieved,
@@ -787,8 +812,8 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     setBusy(true);
     const allRequirementsMet = await evaluateRequirements(text);
     setBusy(false);
-    // 语法检查与追问并行，结果异步回填，不阻塞对话推进。
-    void checkGrammar(answerMsgID, text);
+    // 语法检查与追问并行，结果异步回填；最后一题会等待它完成后再结束。
+    const grammarCheck = checkGrammar(answerMsgID, text);
     if (feedback.missing.length === 0 && !feedback.tooShort) {
       sfx.correct();
     } else {
@@ -819,6 +844,14 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
       stats.itemsDone += 1;
       if (!stats.completedKeys.includes(currentItem.item_key)) {
         stats.completedKeys.push(currentItem.item_key);
+      }
+      // 最后一题：先等批改结果回填，让考生看到本题的错题分析，再手动进入报告。
+      if (!findNextUnasked(partIndex, itemIndex + 1)) {
+        setBusy(true);
+        await grammarCheck.catch(() => undefined);
+        setBusy(false);
+        setReadyToFinish(true);
+        return;
       }
       advance();
       return;
@@ -851,6 +884,9 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     messagesRef.current = [];
     setAnswer("");
     setReport(null);
+    setReadyToFinish(false);
+    setPendingAdvance(false);
+    setSupplementMode(false);
   };
 
   const exportReport = () => {
@@ -1170,6 +1206,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
                       {item.achieved}/{item.required}
                       {!item.met && (item.enforce === "block" ? " · 阻断项未达成" : " · 提示项")}
                       {item.evidence.length > 0 && ` · 证据：${item.evidence.join("、")}`}
+                      {!item.met && item.source_path && ` · 建议复习：${requirementDocTitle(item.source_path)}`}
                     </span>
                   </div>
                 ))}
@@ -1525,6 +1562,27 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
               <div style={{ marginBottom: 8 }}>
                 语法要求尚未达成：{unmetRequirementLabels().join("、")}。可以再答一次，或换一题继续本场。
               </div>
+              {unmetBlocking.some((req) => (req.prompts?.length ?? 0) > 0) && (
+                <div
+                  style={{
+                    marginBottom: 8,
+                    background: "#fff",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    fontSize: 12,
+                    color: "#6b6156",
+                  }}
+                >
+                  <div style={{ marginBottom: 4, fontWeight: 600 }}>试试用下面的问句回答：</div>
+                  {unmetBlocking.map((req) =>
+                    (req.prompts?.length ?? 0) > 0 ? (
+                      <div key={req.key} style={{ marginBottom: 2 }}>
+                        <strong>{req.label}</strong>：{guidanceFor(req)}
+                      </div>
+                    ) : null,
+                  )}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 10 }}>
                 <button
                   className="btn ghost"
@@ -1536,7 +1594,8 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
                     if (currentPart) {
                       pushMessage(
                         currentPart.role,
-                        "Bitte versuchen Sie es noch einmal mit einer vollständigen Antwort.",
+                        nextGuidancePrompt() ||
+                          "Bitte versuchen Sie es noch einmal mit einer vollständigen Antwort.",
                         undefined,
                         "template",
                       );
@@ -1556,7 +1615,37 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
                 >
                   换一题
                 </button>
+                <button
+                  className="btn ghost"
+                  style={{ fontSize: 12, padding: "4px 10px" }}
+                  onClick={() => setShowRequirementHelp((value) => !value)}
+                >
+                  {showRequirementHelp ? "收起要求说明" : "查看要求说明"}
+                </button>
               </div>
+              {showRequirementHelp && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    background: "#fff",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    fontSize: 12,
+                    color: "#6b6156",
+                  }}
+                >
+                  {requirements.map((req) => (
+                    <div key={req.key} style={{ marginBottom: 4 }}>
+                      <strong>{req.label}</strong>
+                      {`（${req.enforce === "block" ? "阻断" : "提示"}，至少 ${req.required} 次）`}
+                      {req.hint_parts.length > 0 &&
+                        ` · 建议在 ${req.hint_parts.map(partLabel).join("、")} 中尝试`}
+                      {req.source_path && ` · 复习文档：${requirementDocTitle(req.source_path)}`}
+                      {` · ${req.met ? "已达成" : "未达成"}`}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -1576,12 +1665,33 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
               <div style={{ fontSize: 13, color: "#8a7d6b", marginBottom: 8 }}>
                 尚未达成：{unmetRequirementLabels().join("、")}。请用一句完整回答展示对应语法结构。
               </div>
+              {unmetBlocking.some((req) => (req.prompts?.length ?? 0) > 0) && (
+                <div
+                  style={{
+                    marginBottom: 8,
+                    background: "#fff",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    fontSize: 12,
+                    color: "#6b6156",
+                  }}
+                >
+                  <div style={{ marginBottom: 4, fontWeight: 600 }}>参考引导问句：</div>
+                  {unmetBlocking.map((req) =>
+                    (req.prompts?.length ?? 0) > 0 ? (
+                      <div key={req.key} style={{ marginBottom: 2 }}>
+                        <strong>{req.label}</strong>：{guidanceFor(req)}
+                      </div>
+                    ) : null,
+                  )}
+                </div>
+              )}
               <textarea
                 value={supplementText}
                 onChange={(event) => setSupplementText(event.target.value)}
                 rows={3}
                 disabled={busy}
-                placeholder="用德语写一句完整的回答…"
+                placeholder="参考上面的引导问句，用德语写一句完整的回答…"
                 style={{
                   width: "100%",
                   borderRadius: 8,
@@ -1609,6 +1719,32 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
               {supplementError && (
                 <div style={{ fontSize: 12, color: "#B9770E", marginTop: 8 }}>{supplementError}</div>
               )}
+            </div>
+          ) : readyToFinish ? (
+            <div
+              style={{
+                marginTop: 10,
+                padding: 14,
+                borderRadius: 12,
+                background: "#EAF5EA",
+                border: "1px solid #BFDCC0",
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#2F6B33", marginBottom: 6 }}>
+                本场问答已完成
+              </div>
+              <div style={{ fontSize: 13, color: "#5C735E", marginBottom: 10 }}>
+                最后一题的分析与参考改写已显示在上方对话中，可先查看再进入报告。
+              </div>
+              <button
+                className="btn primary"
+                onClick={() => {
+                  setReadyToFinish(false);
+                  finishExam();
+                }}
+              >
+                查看考试报告
+              </button>
             </div>
           ) : (
             <>

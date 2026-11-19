@@ -231,6 +231,8 @@ export interface GrammarRequirement {
   min_uses: number;
   enforce: "block" | "warn";
   hint_parts: string[];
+  /** 语法点引导问句，由方案详情接口附加，用于定向补答 */
+  prompts?: string[];
 }
 
 /** 最近五天学过的新词。 */
@@ -612,6 +614,7 @@ export interface SpeakingItemResult {
 export interface RequirementResult {
   key: string
   label: string
+  source_path?: string
   enforce: "block" | "warn"
   required: number
   achieved: number
