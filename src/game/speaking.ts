@@ -222,6 +222,24 @@ export function fetchSpeakingExamParts(params?: {
   });
 }
 
+/** 方案级语法要求；整场任意回答达成即可，hint_parts 仅用于界面提示。 */
+export interface GrammarRequirement {
+  key: string;
+  label: string;
+  source_path: string;
+  patterns: string[];
+  min_uses: number;
+  enforce: "block" | "warn";
+  hint_parts: string[];
+}
+
+/** 最近五天学过的新词。 */
+export interface RecentWord {
+  lemma: string;
+  chinese_mean: string;
+  level: string;
+}
+
 /** 口语方案：关卡里选择的口语入口，决定本场考试抽取哪些题目。 */
 export interface SpeakingPlan {
   id: number;
@@ -231,14 +249,22 @@ export interface SpeakingPlan {
   description: string;
   active: boolean;
   item_count: number;
+  grammar_requirements?: GrammarRequirement[];
 }
 
-/** 拉取口语方案及其题目。 */
-export function fetchSpeakingPlan(id: string | number): Promise<{
+export interface SpeakingPlanDetail {
   plan: SpeakingPlan;
   items: SpeakingItem[];
-}> {
-  return fetch(`${API_BASE}/api/speaking/plans/${id}`, {
+  recent_words?: RecentWord[];
+}
+
+/** 拉取口语方案及其题目；带 device_id 时附带最近五天新词。 */
+export function fetchSpeakingPlan(
+  id: string | number,
+  deviceId?: string,
+): Promise<SpeakingPlanDetail> {
+  const query = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+  return fetch(`${API_BASE}/api/speaking/plans/${id}${query}`, {
     headers: { Accept: "application/json" },
   }).then(async (res) => {
     if (!res.ok) {
@@ -251,8 +277,141 @@ export function fetchSpeakingPlan(id: string | number): Promise<{
       }
       throw new Error(msg);
     }
-    return (await res.json()) as { plan: SpeakingPlan; items: SpeakingItem[] };
+    return (await res.json()) as SpeakingPlanDetail;
   });
+}
+
+// ---------------------------------------------------------------------------
+// 设备标识：学习记录保存在本机，清缓存/换设备视为新用户
+// ---------------------------------------------------------------------------
+
+const DEVICE_KEY = "device.id.v1";
+
+export function getDeviceId(): string {
+  try {
+    const existing = localStorage.getItem(DEVICE_KEY);
+    if (existing) return existing;
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `dev-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem(DEVICE_KEY, id);
+    return id;
+  } catch {
+    return "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 每日新词（需要服务端 X-API-Key；未配置时不请求，页面保持隐藏）
+// ---------------------------------------------------------------------------
+
+const DAILY_WORDS_KEY = (import.meta as unknown as { env?: { VITE_DAILY_WORDS_API_KEY?: string } })
+  .env?.VITE_DAILY_WORDS_API_KEY;
+
+export interface DailyWord {
+  word_id: number;
+  lemma: string;
+  word_type?: string;
+  gender?: string;
+  plural?: string;
+  chinese_mean: string;
+  english_mean?: string;
+  example_de?: string;
+}
+
+export interface DailyWordsResult {
+  date: string;
+  lang: string;
+  level: string;
+  words: DailyWord[];
+  reason?: string;
+}
+
+export function dailyWordsEnabled(): boolean {
+  return !!DAILY_WORDS_KEY;
+}
+
+/** 拉取当天新词；未配置 API Key 或请求失败时返回空列表，页面不报错。 */
+export async function fetchDailyWords(
+  deviceId: string,
+  level?: string,
+): Promise<DailyWordsResult> {
+  if (!DAILY_WORDS_KEY) {
+    return { date: "", lang: "de", level: level ?? "", words: [] };
+  }
+  const query = new URLSearchParams({ lang: "de", count: "5" });
+  if (level) query.set("level", level);
+  if (deviceId) query.set("device_id", deviceId);
+  try {
+    const res = await fetch(`${API_BASE}/api/daily-words?${query.toString()}`, {
+      headers: { Accept: "application/json", "X-API-Key": DAILY_WORDS_KEY },
+    });
+    if (!res.ok) return { date: "", lang: "de", level: level ?? "", words: [] };
+    return (await res.json()) as DailyWordsResult;
+  } catch {
+    return { date: "", lang: "de", level: level ?? "", words: [] };
+  }
+}
+
+/** 标记今日新词已学会；失败静默，不影响练习。 */
+export async function markDailyWordsLearned(deviceId: string, wordIds: number[]): Promise<boolean> {
+  if (!DAILY_WORDS_KEY || !deviceId || wordIds.length === 0) return false;
+  try {
+    const res = await fetch(`${API_BASE}/api/daily-words/learned`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-API-Key": DAILY_WORDS_KEY,
+      },
+      body: JSON.stringify({ device_id: deviceId, word_ids: wordIds }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 语法要求达成判定（服务端无状态，客户端累计 already_met）
+// ---------------------------------------------------------------------------
+
+export interface RequirementCheckResult {
+  key: string;
+  matched: boolean;
+  count: number;
+  evidence: string[];
+}
+
+export interface RequirementCheckResponse {
+  results: RequirementCheckResult[];
+  all_blocking_met: boolean;
+  missing: string[];
+}
+
+export async function checkGrammarRequirements(params: {
+  planId: number;
+  level: string;
+  answer: string;
+  alreadyMet: string[];
+}): Promise<RequirementCheckResponse | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/speaking/requirements/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        plan_id: params.planId,
+        level: params.level,
+        answer: params.answer,
+        already_met: params.alreadyMet,
+      }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as RequirementCheckResponse;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +608,18 @@ export interface SpeakingItemResult {
   avg_response_ms: number
 }
 
+/** 报告中的单条语法要求结果。 */
+export interface RequirementResult {
+  key: string
+  label: string
+  enforce: "block" | "warn"
+  required: number
+  achieved: number
+  met: boolean
+  evidence: string[]
+  attempts: number
+}
+
 export interface SpeakingSessionReport {
   id: string
   level: string
@@ -470,6 +641,12 @@ export interface SpeakingSessionReport {
   words_per_min: number
   /** 逐题反馈 */
   items: SpeakingItemResult[]
+  /** 方案级语法要求达成情况 */
+  requirements?: RequirementResult[]
+  /** 开考时提示的最近五天新词 */
+  recent_words?: RecentWord[]
+  /** 回答中实际使用到的新词 */
+  recent_words_used?: string[]
 }
 
 export function loadSpeakingSessions(): SpeakingSessionReport[] {
@@ -584,6 +761,26 @@ export function reportToMarkdown(report: SpeakingSessionReport): string {
   }
   if (report.missing_points.length > 0) {
     lines.push("## 高频遗漏要点", "", ...report.missing_points.map((p) => `- ${p}`), "");
+  }
+  const requirements = report.requirements ?? [];
+  if (requirements.length > 0) {
+    lines.push("## 语法要求", "");
+    for (const item of requirements) {
+      const status = item.met ? "已达成" : item.enforce === "block" ? "未达成（阻断）" : "未达成（提示）";
+      lines.push(`- ${item.label}：${status}，${item.achieved}/${item.required}`);
+      if (item.evidence.length > 0) {
+        lines.push(`  - 证据：${item.evidence.join("、")}`);
+      }
+    }
+    lines.push("");
+  }
+  if ((report.recent_words ?? []).length > 0) {
+    const used = report.recent_words_used ?? [];
+    lines.push("## 最近五天新词", "");
+    for (const word of report.recent_words ?? []) {
+      lines.push(`- ${word.lemma}（${word.chinese_mean}）${used.includes(word.lemma) ? " ✓ 已使用" : ""}`);
+    }
+    lines.push("");
   }
   lines.push("## 建议", "", report.suggested_review, "");
   lines.push("> 机器批改仅用于练习辅助，不能替代歌德官方人工口试。");

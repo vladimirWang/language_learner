@@ -2,14 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PART_TIME_LIMIT_SEC,
   SPEAKING_LEVELS,
+  checkGrammarRequirements,
+  dailyWordsEnabled,
   evaluateAnswer,
+  fetchDailyWords,
   fetchGrammarCheck,
   fetchSpeakingExamParts,
   fetchSpeakingItems,
   fetchSpeakingPlan,
   fetchSpeakingReply,
+  getDeviceId,
   loadSpeakingProgress,
   loadSpeakingSessions,
+  markDailyWordsLearned,
   reportToMarkdown,
   saveSpeakingError,
   saveSpeakingProgress,
@@ -17,9 +22,12 @@ import {
   speakGerman,
   partLabel,
   topMissingPoints,
+  type DailyWord,
   type ExamAid,
   type ExamPartMode,
   type GrammarCheck,
+  type GrammarRequirement,
+  type RecentWord,
   type SpeakingExamPart,
   type SpeakingFeedback,
   type SpeakingItem,
@@ -69,6 +77,16 @@ interface ChatMessage {
   grammar?: GrammarCheck | null;
   /** 语法检查进行中 */
   checking?: boolean;
+}
+
+/** 本场内累计的语法要求达成状态。 */
+interface RequirementState extends GrammarRequirement {
+  /** 需要达成次数，来自 min_uses */
+  required: number;
+  achieved: number;
+  met: boolean;
+  evidence: string[];
+  attempts: number;
 }
 
 const PART_ORDER = ["part1_intro", "part2_presentation", "part3_discussion"];
@@ -150,11 +168,46 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
   const [showSubtitle, setShowSubtitle] = useState(false);
   const [recent, setRecent] = useState<SpeakingSessionReport[]>([]);
 
+  // 本机设备标识与每日新词（记录只保存在本机）
+  const deviceId = useRef(getDeviceId());
+  const [dailyWords, setDailyWords] = useState<DailyWord[]>([]);
+  const [dailyDate, setDailyDate] = useState("");
+  const [markedWords, setMarkedWords] = useState<number[]>([]);
+
+  // 语法要求：整场累计，未达成时阻断推进
+  const [requirements, setRequirements] = useState<RequirementState[]>([]);
+  const requirementsRef = useRef<RequirementState[]>([]);
+  const [pendingAdvance, setPendingAdvance] = useState(false);
+  const [supplementMode, setSupplementMode] = useState(false);
+  const [supplementText, setSupplementText] = useState("");
+  const [supplementAttempts, setSupplementAttempts] = useState(0);
+  const [supplementError, setSupplementError] = useState("");
+
+  // 最近五天新词提示与使用统计
+  const [recentWords, setRecentWords] = useState<RecentWord[]>([]);
+  const recentUsedRef = useRef<Set<string>>(new Set());
+  const planID = planId ? Number(planId) : 0;
+
   const load = () => {
     setLoading(true);
     setError(null);
     const itemsPromise = planId
-      ? fetchSpeakingPlan(planId).then((detail) => detail.items)
+      ? fetchSpeakingPlan(planId, deviceId.current).then((detail) => {
+          const nextRequirements = (detail.plan.grammar_requirements ?? []).map(
+            (item): RequirementState => ({
+              ...item,
+              required: item.min_uses,
+              achieved: 0,
+              met: false,
+              evidence: [],
+              attempts: 0,
+            }),
+          );
+          requirementsRef.current = nextRequirements;
+          setRequirements(nextRequirements);
+          setRecentWords(detail.recent_words ?? []);
+          return detail.items;
+        })
       : fetchSpeakingItems({ lang: "de" });
     Promise.all([itemsPromise, fetchSpeakingExamParts({ lang: "de" })])
       .then(([list, parts]) => {
@@ -174,6 +227,29 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
   useEffect(() => {
     load();
   }, []);
+
+  // 选择页展示今日新词；未配置 API Key 时保持隐藏
+  useEffect(() => {
+    if (phase !== "select" || initialLevel || !dailyWordsEnabled()) return;
+    let cancelled = false;
+    fetchDailyWords(deviceId.current, level).then((result) => {
+      if (cancelled) return;
+      setDailyWords(result.words ?? []);
+      setDailyDate(result.date);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, level, initialLevel]);
+
+  const markAllDailyWords = async () => {
+    const ids = dailyWords
+      .map((word) => word.word_id)
+      .filter((id) => !markedWords.includes(id));
+    if (ids.length === 0) return;
+    const ok = await markDailyWordsLearned(deviceId.current, ids);
+    if (ok) setMarkedWords((prev) => [...prev, ...ids]);
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -254,6 +330,66 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     setMessages(next);
   };
 
+  /** 统计新词是否出现在回答中（小写词形包含匹配）。 */
+  const trackRecentWords = (text: string) => {
+    if (recentWords.length === 0) return;
+    const lower = text.toLowerCase();
+    const used = recentUsedRef.current;
+    let changed = false;
+    for (const word of recentWords) {
+      if (!used.has(word.lemma) && lower.includes(word.lemma.toLowerCase())) {
+        used.add(word.lemma);
+        changed = true;
+      }
+    }
+    // 使用统计在结束时从 ref 汇总，不需要即时渲染
+    if (changed) recentUsedRef.current = used;
+  };
+
+  /**
+   * 调用服务端判定语法要求，并累计本场达成状态。
+   * 返回全部 block 要求是否已达成；服务不可用时放行，避免死锁。
+   */
+  const evaluateRequirements = async (text: string): Promise<boolean> => {
+    if (!planID || requirementsRef.current.length === 0) return true;
+    const alreadyMet = requirementsRef.current.filter((r) => r.met).map((r) => r.key);
+    const result = await checkGrammarRequirements({
+      planId: planID,
+      level,
+      answer: text,
+      alreadyMet,
+    });
+    if (!result) return true;
+
+    const next = requirementsRef.current.map((req): RequirementState => {
+      const hit = result.results.find((item) => item.key === req.key);
+      const gained = hit && hit.evidence.length > 0 ? 1 : 0;
+      const achieved = Math.min(req.required, req.achieved + gained);
+      const evidence =
+        gained && hit
+          ? Array.from(new Set([...req.evidence, ...hit.evidence]))
+          : req.evidence;
+      return {
+        ...req,
+        achieved,
+        evidence,
+        met: achieved >= req.required,
+        attempts: req.met ? req.attempts : req.attempts + 1,
+      };
+    });
+    requirementsRef.current = next;
+    setRequirements(next);
+    return !next.some((req) => req.enforce === "block" && !req.met);
+  };
+
+  const hasUnmetBlocking = () =>
+    requirementsRef.current.some((req) => req.enforce === "block" && !req.met);
+
+  const unmetRequirementLabels = () =>
+    requirementsRef.current
+      .filter((req) => req.enforce === "block" && !req.met)
+      .map((req) => req.label);
+
   useEffect(() => {
     if (phase !== "select") return;
     setRecent(loadSpeakingSessions().slice(0, 3));
@@ -286,6 +422,22 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     setItemIndex(0);
     setExchanges(0);
     setReport(null);
+    // 重置语法要求与新词统计
+    const resetRequirements = requirementsRef.current.map((req) => ({
+      ...req,
+      achieved: 0,
+      met: false,
+      evidence: [],
+      attempts: 0,
+    }));
+    requirementsRef.current = resetRequirements;
+    setRequirements(resetRequirements);
+    recentUsedRef.current = new Set();
+    setPendingAdvance(false);
+    setSupplementMode(false);
+    setSupplementText("");
+    setSupplementAttempts(0);
+    setSupplementError("");
     setPhase("exam");
     pushMessage(parts[0].role, parts[0].items[0].prompt_de);
     sfx.tap();
@@ -336,6 +488,18 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
       repetition_ratio: repetitionRatio,
       words_per_min: wordsPerMin,
       items,
+      requirements: requirementsRef.current.map((req) => ({
+        key: req.key,
+        label: req.label,
+        enforce: req.enforce,
+        required: req.required,
+        achieved: req.achieved,
+        met: req.met,
+        evidence: req.evidence,
+        attempts: req.attempts,
+      })),
+      recent_words: recentWords,
+      recent_words_used: [...recentUsedRef.current],
     };
     saveSpeakingSession(result);
     const boosted = Array.from(
@@ -346,6 +510,46 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     setPhase("report");
     onFinish?.();
     sfx.win();
+  };
+
+  /** 结束前检查阻断型语法要求；未达成时进入补答，而不是直接结束。 */
+  const requestFinish = () => {
+    if (busy) return;
+    if (!hasUnmetBlocking()) {
+      finishExam();
+      return;
+    }
+    setPendingAdvance(false);
+    setSupplementMode(true);
+    setSupplementAttempts(0);
+    setSupplementText("");
+    setSupplementError("");
+  };
+
+  /** 补答：自由回答一句完整句子，最多 3 次。 */
+  const submitSupplement = async () => {
+    const text = supplementText.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    trackRecentWords(text);
+    const allMet = await evaluateRequirements(text);
+    setBusy(false);
+    setSupplementText("");
+    if (allMet) {
+      finishExam();
+      return;
+    }
+    const next = supplementAttempts + 1;
+    setSupplementAttempts(next);
+    if (next >= 3) {
+      setSupplementError("补答 3 次仍未达成，可直接结束并记录未达成。");
+    }
+  };
+
+  /** 3 次补答后的兜底出口：二次确认后结束并记录未达成。 */
+  const endWithoutMet = () => {
+    if (!window.confirm("语法要求尚未达成，结束后报告会标记为未达成。确定结束吗？")) return;
+    finishExam();
   };
 
   // 从关卡进入时锁定等级，等考试配置/题库就绪后直接开考。
@@ -389,7 +593,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     // 同一话题下有多道题，若某题问句已经在追问中出现过就跳过，避免换题后重复提问。
     const next = findNextUnasked(partIndex, itemIndex + 1);
     if (!next) {
-      finishExam();
+      requestFinish();
       return;
     }
     if (next.part !== partIndex) {
@@ -421,11 +625,16 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
   /** 时间到后由考生主动进入下一部分（或结束整场练习）。 */
   const continueAfterTimeout = () => {
     const next = partIndex + 1 < parts.length ? findNextUnasked(partIndex + 1, 0) : null;
-    if (next) {
-      jumpToPart(next.part, next.item);
-    } else {
-      finishExam();
+    if (!next) {
+      requestFinish();
+      return;
     }
+    // 进入下一部分前也要满足阻断型语法要求。
+    if (hasUnmetBlocking()) {
+      setPendingAdvance(true);
+      return;
+    }
+    jumpToPart(next.part, next.item);
   };
 
   // 自动朗读考官/搭档的新消息（系统 TTS 不可用时静默跳过）。
@@ -483,7 +692,7 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     patchMessage(msgIDValue, { checking: false, grammar: result });
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!currentItem || !currentPart || busy || !answer.trim()) return;
     const text = answer.trim();
     // 要点只属于题库原问题：追问的回答不再按原要点判定，避免「答对了却判 0 分」。
@@ -534,6 +743,11 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
 
     const answerMsgID = pushMessage("user", text, isFollowup ? undefined : feedback);
     setAnswer("");
+    trackRecentWords(text);
+    // 语法要求整场累计；判定失败时放行，避免服务异常导致死锁。
+    setBusy(true);
+    const allRequirementsMet = await evaluateRequirements(text);
+    setBusy(false);
     // 语法检查与追问并行，结果异步回填，不阻塞对话推进。
     void checkGrammar(answerMsgID, text);
     if (feedback.missing.length === 0 && !feedback.tooShort) {
@@ -558,6 +772,11 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
     const isDiscussion = currentPart.mode === "discussion";
     const maxExchanges = isDiscussion ? 2 : currentPart.maxFollowups + 1;
     if (nextExchange >= maxExchanges) {
+      // 未达成阻断型要求：停在本题，由考生选择「再答一次」或「换一题」。
+      if (!allRequirementsMet) {
+        setPendingAdvance(true);
+        return;
+      }
       stats.itemsDone += 1;
       if (!stats.completedKeys.includes(currentItem.item_key)) {
         stats.completedKeys.push(currentItem.item_key);
@@ -650,7 +869,45 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
             <p style={{ color: "#8a7d6b", fontSize: 13, marginTop: 0 }}>
               流程：第一部分问答 → 第二部分陈述 → 第三部分双人讨论。
               机器批改仅用于练习辅助，不能替代歌德官方人工口试。
+              <br />
+              学习记录保存在本机，清除缓存或更换设备会视为新用户。
             </p>
+
+            {dailyWordsEnabled() && dailyWords.length > 0 && (
+              <div
+                style={{
+                  background: "#fff",
+                  borderRadius: 12,
+                  padding: 14,
+                  marginTop: 14,
+                  boxShadow: "0 6px 18px rgba(160,125,85,.10)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ fontSize: 14 }}>今日新词{dailyDate ? ` · ${dailyDate}` : ""}</strong>
+                  <button
+                    className="btn ghost"
+                    style={{ fontSize: 12, padding: "3px 10px" }}
+                    onClick={markAllDailyWords}
+                    disabled={dailyWords.every((word) => markedWords.includes(word.word_id))}
+                  >
+                    {dailyWords.every((word) => markedWords.includes(word.word_id))
+                      ? "已标记学会"
+                      : "学会了"}
+                  </button>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                  {dailyWords.map((word) => (
+                    <span
+                      key={word.word_id}
+                      style={{ background: "#F1F8FF", borderRadius: 6, padding: "3px 9px", fontSize: 13 }}
+                    >
+                      {word.lemma} · {word.chinese_mean}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {loading && <p style={{ color: "#8a7d6b" }}>正在加载口语题库…</p>}
             {error && (
@@ -828,6 +1085,55 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
                 </div>
               </div>
             )}
+            {(report.requirements ?? []).length > 0 && (
+              <div style={{ background: "#FFF8E1", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: "#B9770E", marginBottom: 6 }}>语法要求</div>
+                {(report.requirements ?? []).map((item) => (
+                  <div key={item.key} style={{ fontSize: 13, marginBottom: 4 }}>
+                    <span style={{ color: item.met ? "#2E7D32" : "#C0392B" }}>
+                      {item.met ? "✓" : "✗"} {item.label}
+                    </span>
+                    <span style={{ color: "#8a7d6b", marginLeft: 8 }}>
+                      {item.achieved}/{item.required}
+                      {!item.met && (item.enforce === "block" ? " · 阻断项未达成" : " · 提示项")}
+                      {item.evidence.length > 0 && ` · 证据：${item.evidence.join("、")}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(report.recent_words ?? []).length > 0 && (
+              <div style={{ background: "#F1F8FF", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: "#2F86D6", marginBottom: 6 }}>
+                  最近五天新词使用情况
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {(report.recent_words ?? []).map((word) => {
+                    const used = (report.recent_words_used ?? []).includes(word.lemma);
+                    return (
+                      <span
+                        key={word.lemma}
+                        style={{
+                          background: used ? "#E3F6E5" : "#fff",
+                          color: used ? "#2E7D32" : "#6b6156",
+                          borderRadius: 6,
+                          padding: "2px 8px",
+                          fontSize: 13,
+                        }}
+                      >
+                        {used ? "✓ " : ""}
+                        {word.lemma}（{word.chinese_mean}）
+                      </span>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 12, color: "#8a7d6b", marginTop: 6 }}>
+                  已使用 {(report.recent_words_used ?? []).length} / {report.recent_words?.length ?? 0} 个
+                </div>
+              </div>
+            )}
+
             <div style={{ background: "#F4FBF4", borderRadius: 10, padding: 14, marginBottom: 12 }}>
               <div style={{ fontSize: 13, color: "#4FBF58", marginBottom: 6 }}>
                 流利度（文本模式近似）
@@ -910,6 +1216,62 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
 
       <div className="play-body">
         <div style={{ width: "100%", maxWidth: 760 }}>
+          {recentWords.length > 0 && (
+            <div
+              style={{
+                background: "#F1F8FF",
+                borderRadius: 10,
+                padding: "8px 12px",
+                marginBottom: 10,
+                fontSize: 13,
+                color: "#2F86D6",
+              }}
+            >
+              最近五天新词：
+              {recentWords.map((word) => `${word.lemma}（${word.chinese_mean}）`).join("、")}
+            </div>
+          )}
+
+          {requirements.length > 0 && (
+            <div
+              style={{
+                background: "#fff",
+                borderRadius: 10,
+                padding: "8px 12px",
+                marginBottom: 10,
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                fontSize: 13,
+              }}
+            >
+              <span style={{ color: "#8a7d6b" }}>语法要求：</span>
+              {requirements.map((req) => {
+                const color = req.met ? "#2E7D32" : req.enforce === "block" ? "#C0392B" : "#B9770E";
+                return (
+                  <span
+                    key={req.key}
+                    title={
+                      req.hint_parts.length > 0
+                        ? `建议在 ${req.hint_parts.map(partLabel).join("、")} 中尝试`
+                        : undefined
+                    }
+                    style={{
+                      color,
+                      background: req.met ? "#E3F6E5" : "#FFF3E0",
+                      borderRadius: 6,
+                      padding: "2px 8px",
+                    }}
+                  >
+                    {req.met ? "✓ " : ""}
+                    {req.label} {req.achieved}/{req.required}
+                    {!req.met && req.enforce === "block" ? "（未达成）" : ""}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
           {currentPart?.aid && <ExamAidPanel aid={currentPart.aid} />}
           <div
             style={{
@@ -1076,26 +1438,129 @@ export default function SpeakingExamView({ onExit, initialLevel, topic, planId, 
             </div>
           )}
 
-          <VoiceAnswerInput
-            value={answer}
-            onChange={setAnswer}
-            onSubmit={submit}
-            disabled={busy}
-            rows={3}
-            lang={currentItem?.lang ?? "de"}
-          />
+          {pendingAdvance && !supplementMode && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: "#FFF3E0",
+                color: "#B9770E",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ marginBottom: 8 }}>
+                语法要求尚未达成：{unmetRequirementLabels().join("、")}。可以再答一次，或换一题继续本场。
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  className="btn ghost"
+                  style={{ fontSize: 12, padding: "4px 10px" }}
+                  disabled={busy}
+                  onClick={() => {
+                    setPendingAdvance(false);
+                    setExchanges(0);
+                    if (currentPart) {
+                      pushMessage(
+                        currentPart.role,
+                        "Bitte versuchen Sie es noch einmal mit einer vollständigen Antwort.",
+                        undefined,
+                        "template",
+                      );
+                    }
+                  }}
+                >
+                  再答一次
+                </button>
+                <button
+                  className="btn ghost"
+                  style={{ fontSize: 12, padding: "4px 10px" }}
+                  disabled={busy}
+                  onClick={() => {
+                    setPendingAdvance(false);
+                    advance();
+                  }}
+                >
+                  换一题
+                </button>
+              </div>
+            </div>
+          )}
 
-          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-            <button className="btn primary" onClick={submit} disabled={busy || !answer.trim()}>
-              提交回答
-            </button>
-            <button className="btn ghost" onClick={skipItem} disabled={busy}>
-              跳过本题
-            </button>
-            <button className="btn ghost" onClick={finishExam} disabled={busy}>
-              结束练习
-            </button>
-          </div>
+          {supplementMode ? (
+            <div
+              style={{
+                marginTop: 10,
+                padding: 14,
+                borderRadius: 12,
+                background: "#FFF8E1",
+                border: "1px solid #F3D19E",
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#B9770E", marginBottom: 6 }}>
+                语法要求补答（{supplementAttempts}/3）
+              </div>
+              <div style={{ fontSize: 13, color: "#8a7d6b", marginBottom: 8 }}>
+                尚未达成：{unmetRequirementLabels().join("、")}。请用一句完整回答展示对应语法结构。
+              </div>
+              <textarea
+                value={supplementText}
+                onChange={(event) => setSupplementText(event.target.value)}
+                rows={3}
+                disabled={busy}
+                placeholder="用德语写一句完整的回答…"
+                style={{
+                  width: "100%",
+                  borderRadius: 8,
+                  border: "1px solid #E0D6C4",
+                  padding: 10,
+                  fontSize: 14,
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+                <button
+                  className="btn primary"
+                  onClick={submitSupplement}
+                  disabled={busy || !supplementText.trim()}
+                >
+                  提交补答
+                </button>
+                {supplementAttempts >= 3 && (
+                  <button className="btn ghost" onClick={endWithoutMet} disabled={busy}>
+                    结束并记录未达成
+                  </button>
+                )}
+              </div>
+              {supplementError && (
+                <div style={{ fontSize: 12, color: "#B9770E", marginTop: 8 }}>{supplementError}</div>
+              )}
+            </div>
+          ) : (
+            <>
+              <VoiceAnswerInput
+                value={answer}
+                onChange={setAnswer}
+                onSubmit={submit}
+                disabled={busy}
+                rows={3}
+                lang={currentItem?.lang ?? "de"}
+              />
+
+              <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+                <button className="btn primary" onClick={submit} disabled={busy || !answer.trim()}>
+                  提交回答
+                </button>
+                <button className="btn ghost" onClick={skipItem} disabled={busy}>
+                  跳过本题
+                </button>
+                <button className="btn ghost" onClick={requestFinish} disabled={busy}>
+                  结束练习
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
